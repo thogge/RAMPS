@@ -316,16 +316,26 @@ def baseline_and_deglitch(orig_spec,
     xx = xx.astype(np.float32) #To avoid bug with ma.polyfit in np1.6
     npoly = find_best_baseline(masked,xx,max_order,prior_penalty)
     basepoly = fit_baseline(masked,xx,ndeg=npoly)
-    baseline = basepoly(xx)
-    
+    #Some kludgy code to refactor the baseline polynomial to
+    #the full size spectra
+    xxx = np.arange(orig_spec.size)
+    params = np.asarray(basepoly)
+    rr = filter_width
+    newparams = []
+    for i,p in enumerate(params[::-1]):
+        newparams.append(p/rr**i)
+    newparams = newparams[::-1]
+    newpoly = np.poly1d(newparams)
+    newbaseline = newpoly(xxx) 
     #Subtract off baseline
-    sub = smoothed-baseline
+    sub = orig_spec-newbaseline
+    filtered_spectrum = im.median_filter(sub,filter_width)[::filter_width]
 
     if do_vel:
         #Reverse spectral array so positive velocity is on the right
-        final = sub[::-1]
+        final = filtered_spectrum[::-1]
     else:
-	final = sub
+	final = filtered_spectrum
 
     return(final)
 
