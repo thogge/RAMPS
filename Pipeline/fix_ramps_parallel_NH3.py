@@ -5,7 +5,8 @@ fix_ramps_parallel_NH3.py
 
 Fit baselines and remove glitches/spikes from RAMPS data.
 Optionally transforms to velocity and outputs a (masked)
-moment zero (integrated intensity map)
+moment zero (integrated intensity map) and first moment
+(velocity field) 
 
 This version runs in parallel, which is useful because
 the process is fairly slow.

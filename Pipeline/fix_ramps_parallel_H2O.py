@@ -5,7 +5,8 @@ fix_ramps_parallel_H2O.py
 
 Fit baselines and remove glitches/spikes from RAMPS data.
 Optionally transforms to velocity and outputs a (masked)
-moment zero (integrated intensity map)
+moment zero (integrated intensity map) and first moment
+(velocity field) 
 
 This version runs in parallel, which is useful because
 the process is fairly slow.
@@ -13,7 +14,7 @@ the process is fairly slow.
 Example:
 python fix_ramps_parallel_H2O.py 
        -i L30_Tile01-04_23694_MHz_line.fits 
-       -o L30_Tile01-04_fixed.fits -fv
+       -o L30_Tile01-04_fixed.fits -fv01
 
 -i : Input      -- Input file (reduced by pipeline)
 -o : Output     -- Output file 
@@ -39,10 +40,6 @@ import scipy.signal as si
 import matplotlib.pyplot as plt
 import multiprocessing, logging
 import my_pad
-import math
-import datetime
-import warnings
-import pdb
 
 def main():
 
