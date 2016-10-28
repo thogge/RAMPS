@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
 """
-fix_ramps_parallel_NH3.py
+fix_ramps_parallel.py
 
 Fit baselines and remove glitches/spikes from RAMPS data.
 Optionally transforms to velocity and outputs a (masked)
@@ -101,7 +101,7 @@ def main():
             ps.append(multiprocessing.Process(target=do_chunk_fit,
                                               args=(num,s[num],
                                                     filter_width=filter_width,
-                                                    do_vel)))
+                                                    do_vel=do_vel)))
         for p in ps:
             p.start()
         for p in ps:
