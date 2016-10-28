@@ -54,7 +54,7 @@ for directory in os.listdir(rootcube):
                 if os.path.isdir(fitsfile):
                     print "There is an extra directory here called " + files + " . Skipping"
                 else:
-                    if "line.fits" in files:
+                    if ("line.fits" in files) or ("cube.fits" in files):
                         print fitsfile
                         #this is pretty hardcored for now. better search algorithm would be smart
                         if "23694" in files:
@@ -73,70 +73,33 @@ for directory in os.listdir(rootcube):
                             fixedfile = fitsfile[:-19]+"CH3OH_1_fixed.fits"
                         elif "21550" in files:
                             fixedfile = fitsfile[:-19]+"CH3OH_2_fixed.fits"
+                        croppedfitsfile = fitsfile[:-5] + "_cropped.fits"
                         print fixedfile
-                        if overwrite:
-                            if os.path.exists(fixedfile):
-                                print 'Fixing cube and overwriting old cube'
-                            else:
-                                print 'Fixing cube'
+                        finalfile = fixedfile[:-11] + "_final.fits"
+                        print finalfile
+                        noisefile = fixedfile[:-11] + "_noise.fits"
+                        if (os.path.exists(finalfile) == False) or overwrite:
+                            print 'Fixing cube'
                             if 'NH3' in fixedfile:
-                                croppedfitsfile = fitsfile[:-5] + "_cropped.fits"
-                                executestring = "python " + rootdir + "scripts/python/crop_cube_spectra.py -i " + fitsfile + " -o " + croppedfitsfile + " -s 0 -e 13884"
-                                print(executestring)
-                                os.system(executestring)
-                                executestring = "python " + rootdir + "scripts/python/fix_ramps_parallel_NH3.py -i " + croppedfitsfile + " -o " + fixedfile + " -fv01"
-                                print(executestring)
-                                os.system(executestring)
-                                finalfile = fixedfile[:-5] + "_final.fits"
-                                executestring = "python " + rootdir + "scripts/python/auto_crop_cube.py -i " + fixedfile + " -o " + finalfile
-                                print(executestring)
-                                os.system(executestring)
-                                noisefile = fixedfile[:-11] + "_noise.fits"
-                                executestring = "python " + rootdir + "scripts/python/make_noise_map.py -i " + finalfile + " -o " + noisefile
-                                print(executestring)
-                                os.system(executestring)
+                                end_channel = '13884'
+                                smooth = '11'
                             elif 'H2O' in fixedfile:
-                                executestring = "python " + rootdir + "scripts/python/fix_ramps_parallel_H2O.py -i " + fitsfile + " -o " + fixedfile + " -fv01"	
-                                print(executestring)
-                                os.system(executestring)
-       	       	       	       	finalfile = fixedfile[:-5] + "_final.fits"
-                                executestring = "python " + rootdir + "scripts/python/auto_crop_cube.py -i " + fixedfile + " -o " + finalfile
-                                print(executestring)
-                                os.system(executestring)
-                                noisefile = fixedfile[:-11] + "_noise.fits"
-                                executestring = "python " + rootdir + "scripts/python/make_noise_map.py -i " + finalfile + " -o " + noisefile
-                                print(executestring)
-                                os.system(executestring)
+                                end_channel = '15564'
+                                smooth = '6'
+                            executestring = "python " + rootdir + "scripts/python/crop_cube_spectra.py -i " + fitsfile + " -o " + croppedfitsfile + " -s 820 -e "+end_channel
+                            print(executestring)
+                            os.system(executestring)
+                            executestring = "python " + rootdir + "scripts/python/fix_ramps_parallel.py -i " + croppedfitsfile + " -o " + fixedfile + " -s " + smooth + " -fv01"
+                            print(executestring)
+                            os.system(executestring)
+                            executestring = "rm " + croppedfitsfile
+                            print(executestring)
+                            os.system(executestring)
+                            executestring = "python " + rootdir + "scripts/python/auto_crop_cube.py -i " + fixedfile + " -o " + finalfile
+                            print(executestring)
+                            os.system(executestring)
+                            executestring = "python " + rootdir + "scripts/python/make_noise_map.py -i " + finalfile + " -o " + noisefile
+                            print(executestring)
+                            os.system(executestring)
                         else:
-                            if os.path.exists(fixedfile):
-                                print "Cube already fixed."
-                            else:
-                                print "Not yet fixed! Doing fitting now."
-                                if 'NH3' in fixedfile:
-                                    croppedfitsfile = fitsfile[:-5] + "_cropped.fits"
-                                    executestring = "python " + rootdir + "scripts/python/crop_cube_spectra.py -i " + fitsfile + " -o " + croppedfitsfile + " -s 0 -e 13884"
-                                    print(executestring)
-                                    os.system(executestring)
-                                    executestring = "python " + rootdir + "scripts/python/fix_ramps_parallel_NH3.py -i " + croppedfitsfile + " -o " + fixedfile + " -fv01"
-                                    print(executestring)
-                                    os.system(executestring)
-                                    finalfile = fixedfile[:-5] + "_final.fits"
-                                    executestring = "python " + rootdir + "scripts/python/auto_crop_cube.py -i " + fixedfile + " -o " + finalfile
-                                    print(executestring)
-                                    os.system(executestring)
-                                    noisefile = fixedfile[:-11] + "_noise.fits"
-                                    executestring = "python " + rootdir + "scripts/python/make_noise_map.py -i " + finalfile + " -o " + noisefile
-                                    print(executestring)
-                                    os.system(executestring)
-                                elif 'H2O' in fixedfile:
-                                    executestring = "python " + rootdir + "scripts/python/fix_ramps_parallel_H2O.py -i " + fitsfile + " -o " + fixedfile + " -fv01"
-                                    print(executestring)
-                                    os.system(executestring)
-                                    finalfile = fixedfile[:-5] + "_final.fits"
-                                    executestring = "python " + rootdir + "scripts/python/auto_crop_cube.py -i " + fixedfile + " -o " + finalfile
-                                    print(executestring)
-                                    os.system(executestring)
-                                    noisefile = fixedfile[:-11] + "_noise.fits"
-                                    executestring = "python " + rootdir + "scripts/python/make_noise_map.py -i " + finalfile + " -o " + noisefile
-                                    print(executestring)
-                                    os.system(executestring)
+                            print "Skipping this cube, it was already fixed."
