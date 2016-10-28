@@ -1,10 +1,11 @@
 """
 fix_all_baselines.py
 
-Script to run fix_ramps_parallel_NH3.py and fix_ramps_parallel_H2O.py
-on all RAMPS data cubes that have not been baseline subtracted. 
-Additionally, there is an option to fit all cubes, even those that have 
-been fit previously. This option will overwrite the previously fit cubes. 
+Script to run fix_ramps_parallel.py on all RAMPS data cubes 
+that have not been baseline subtracted. Additionally, there 
+is an option to fit all cubes, even those that have been 
+fit previously. This option will overwrite the previously 
+fit cubes. 
 
 Example:
 python fix_all_baselines.py -o
@@ -15,7 +16,6 @@ python fix_all_baselines.py -o
 """
 
 import sys,os,getopt
-import pdb
 
 overwrite = False
 try:
@@ -52,11 +52,10 @@ for directory in os.listdir(rootcube):
             for files in os.listdir(tiledir):
                 fitsfile = tiledir + "/" + files
                 if os.path.isdir(fitsfile):
-                    print "There is an extra directory here called " + files + " . Skipping"
+                    print "There is an extra directory here called " + files + " . Skipping."
                 else:
                     if ("line.fits" in files) or ("cube.fits" in files):
                         print fitsfile
-                        #this is pretty hardcored for now. better search algorithm would be smart
                         if "23694" in files:
                             fixedfile = fitsfile[:-19]+"NH3_1-1_fixed.fits"
                         elif "23722" in files:
@@ -102,4 +101,4 @@ for directory in os.listdir(rootcube):
                             print(executestring)
                             os.system(executestring)
                         else:
-                            print "Skipping this cube, it was already fixed."
+                            print "This cube was already fixed. Skipping."
