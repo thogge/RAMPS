@@ -85,16 +85,13 @@ for directory in os.listdir(rootcube):
                             elif 'H2O' in fixedfile:
                                 end_channel = '15564'
                                 smooth = '6'
-                            executestring = "python " + rootdir + "scripts/python/crop_cube_spectra.py -i " + fitsfile + " -o " + croppedfitsfile + " -s 820 -e "+end_channel
+                            executestring = "python " + rootdir + "scripts/python/crop_cube.py -i " + fitsfile + " -o " + croppedfitsfile + " -s 820 -e "+end_channel
                             print(executestring)
                             os.system(executestring)
                             executestring = "python " + rootdir + "scripts/python/fix_ramps_parallel.py -i " + croppedfitsfile + " -o " + fixedfile + " -s " + smooth + " -fv01"
                             print(executestring)
                             os.system(executestring)
                             executestring = "rm " + croppedfitsfile
-                            print(executestring)
-                            os.system(executestring)
-                            executestring = "python " + rootdir + "scripts/python/auto_crop_cube.py -i " + fixedfile + " -o " + finalfile
                             print(executestring)
                             os.system(executestring)
                             executestring = "python " + rootdir + "scripts/python/make_noise_map.py -i " + finalfile + " -o " + noisefile

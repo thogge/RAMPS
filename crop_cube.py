@@ -7,7 +7,9 @@ Crops the nans from the top and bottom of a cube,
 leaving a rectangular shaped cube with only 
 finite values. This is meant to crop partial tiles
 from RAMPS and is not suited to crop pixels in 
-the x direction. 
+the x direction. Also, can crop along the
+spectral axis by giving the new first and last
+channel.
 
 Example:
 python crop_cube.py -i L30_Tile01.fits
@@ -36,6 +38,7 @@ import pyspeckit
 
 def main():
     output_file = "default.fits"
+    spec_crop = False
     try:
         opts,args = getopt.getopt(sys.argv[1:],"i:o:s:e:h")
     except getopt.GetoptError,err:
@@ -49,8 +52,10 @@ def main():
             output_file = a
         elif o == "-s":
             new_channel_start = int(a)
+            spec_crop = True
         elif o == "-e":
             new_channel_end = int(a)
+            spec_crop = True
         elif o == "-h":
             print(__doc__)
             sys.exit(1)
@@ -59,9 +64,25 @@ def main():
             print(__doc__)
             sys.exit(2)
 
-
+    """
+    Read the data, remove the extra axis if necessary.
+    """
     d,h = pyfits.getdata(input_file,header=True)
-    d = np.squeeze(d)
+    temp_file = input_file[:-5]+"_temp.fits"
+    if len(d.shape) > 3:
+        d = np.squeeze(d)
+        h = strip_header(h,4)
+    pyfits.writeto(temp_file,d,h,clobber=True)
+    """
+    Crop the cube along its spectral axis. Fix the
+    header and write to temporary file.
+    """
+    if spec_crop:
+        d_crop = d[new_channel_start:new_channel_end,:,:]
+        h_crop = fix_header(new_channel_start,new_channel_end,h)
+        pyfits.writeto(temp_file,d_crop,h_crop,clobber=True)
+        d = d_crop
+        h = h_crop
 
     """
     Find locations where the entire row (in x direction)
@@ -86,23 +107,39 @@ def main():
     x_halfwidth = x_center
 
     """
-    Use Pyspeckit to crop the cube and write it to the output file.
+    Use Pyspeckit to crop the cube spatially and write it to the output file.
     """
-    cube = SpectralCube.read(input_file)
+    cube = SpectralCube.read(temp_file)
+    os.system('rm ' + temp_file)
     new_cube = pyspeckit.cubes.subcube(cube,x_center,x_halfwidth,y_center,y_halfwidth)
     new_cube.write(output_file,format='fits',overwrite=True)
 
+    """
+    Fix the header info that Pyspeckit changed. Should probably 
+    figure out how to stop it from doing that. 
+    Also, check that all of the nans were removed.
+    """
     d,h = pyfits.getdata(output_file,header=True)
     if np.isnan(np.sum(d)):
         print 'Not all nans removed from ' + input_file
     h['CTYPE3'] = 'VELO-LSR'
-    #Crop the cube along its spectral axis
-    d_crop = d[new_channel_start:new_channel_end,:,:]
-    #Change the header and write the cropped cube
-    h_crop = fix_header(new_channel_start,new_channel_end,h)
-    pyfits.writeto(output_file,d_crop,h_crop,clobber=True)
+    pyfits.writeto(output_file,d,h,clobber=True)
 
 
+def strip_header(h,n):
+    """
+    Remove the nth dimension from a FITS header
+    """
+    h['NAXIS'] = n-1
+    try:
+        del h['NAXIS'+str(n)]
+        del h['CTYPE'+str(n)]
+        del h['CRVAL'+str(n)]
+        del h['CDELT'+str(n)]
+        del h['CRPIX'+str(n)]
+    except:
+        pass
+    return(h)
 
 def fix_header(channel_start,channel_end,h):
     """
