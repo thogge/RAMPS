@@ -32,7 +32,10 @@ python fix_ramps_parallel_H2O.py
 
 
 import sys,os,getopt
-import pyfits
+try:
+    import astropy.io.fits as pyfits
+except:
+    import pyfits
 import scipy.ndimage as im
 import numpy as np
 import numpy.ma as ma
@@ -75,23 +78,29 @@ def main():
             print(__doc__)
             sys.exit(2)
         
+    #Read in data into array, remove single-dimensional entries
     d,h = pyfits.getdata(input_file,header=True)
     d = np.squeeze(d)
     
+    #Set 'numcores' to the number of processers available
+    numcores = 16 
+
     if do_fit:
-        #Set 'numcores' to the number of processers available
-        numcores = 16 
+        #Split the data
         s = np.array_split(d, numcores, 2)
         ps = []
+        #Fit baselines and write temporary to files
         for num in range(len(s)):
             ps.append(multiprocessing.Process(target=do_chunk_fit,args=(num,s[num],do_vel)))
         for p in ps:
             p.start()
         for p in ps:
             p.join()
+        #Recombine baselined temporary files 
         dout = recombine(numcores)
 
         if do_vel:
+            #Edit header to put spectral axis in velocity space
             hout = downsample_header(change_to_velocity(strip_header(h,4)))
             old_ref_channel =  float(hout['CRPIX3'])
             hout['CRPIX3'] = float(len(dout[:,1,1]))-old_ref_channel
@@ -100,15 +109,17 @@ def main():
 	hout['DATAMIN'] = -3.
         hout['DATAMAX'] = 3.
         pyfits.writeto(output_file,dout,hout,clobber=True)
-        #Remove intermediate files
+        #Remove temporary files
         os.system("rm temp*")
     else:
         dout = d
         hout = h
     
     if do_mom0:
+        #Split the data
         s = np.array_split(dout, numcores, 2)
         ps = []
+        #Create integrated intensity maps and write to temporary files
         for num in range(len(s)):
             ps.append(multiprocessing.Process(target=do_chunk_mom0,args=(num,s[num],hout)))
         for p in ps:
@@ -116,15 +127,17 @@ def main():
         
         for p in ps:
             p.join()
+        #Recombine temporary files
         mom0 = recombine_moments(numcores)
         mom0[np.where(mom0 == 0)] = np.nan
         mom0_file = output_file[0:-5]+"_mom0.fits"     
+        #Update input header
         hmom = strip_header(h,3)
         hmom['BUNIT'] = 'K*km/s'
         hmom['DATAMIN'] = 0.
        	hmom['DATAMAX'] = 20.
         pyfits.writeto(mom0_file,mom0,hmom,clobber=True)  
-        #Remove intermediate files
+        #Remove temporary  files
         os.system("rm temp*")
 
         
@@ -161,7 +174,7 @@ def main():
         hmom['DATAMIN'] = mom1_min
         hmom['DATAMAX'] = mom1_max
         pyfits.writeto(mom1_file,mom1,hmom,clobber=True)
-        #Remove intermediate files
+        #Remove temporary files
         os.system("rm temp*")
 
 
@@ -243,7 +256,7 @@ def noise_est(spec):
     spectrum to avoid any residual single channel
     birdies in the data.
     """
-    spec = spec[int(0.2*len(spec):0.8*len(spec))]
+    spec = spec[int(0.2*len(spec)):int(0.8*len(spec))]
     if np.isnan(np.sum(spec)):
         noise_est = np.nan
     else:

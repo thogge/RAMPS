@@ -81,8 +81,7 @@ def main():
     #Read in data into array, remove single-dimensional entries
     d,h = pyfits.getdata(input_file,header=True)
     d = np.squeeze(d)
-    import pdb
-    pdb.set_trace()
+    
     #Set 'numcores' to the number of processers available
     numcores = 16 
 
@@ -102,7 +101,7 @@ def main():
 
         if do_vel:
             #Edit header to put spectral axis in velocity space
-            hout = downsample_header(change_to_velocity(strip_header(h[:],4)))
+            hout = downsample_header(change_to_velocity(strip_header(h,4)))
             old_ref_channel =  float(hout['CRPIX3'])
             hout['CRPIX3'] = float(len(dout[:,1,1]))-old_ref_channel
         else:
@@ -143,19 +142,7 @@ def main():
 
         
     if do_mom1:
-        """
-        hout = pyfits.getheader(output_file)
-        if (h['CTYPE3'] == 'VELO-LSR'):
-            if (h['NAXIS'] == 3):
-                hout = h
-            elif (h['NAXIS'] == 4):
-                hout = strip_header(h,4)
-        elif (h['CTYPE3'] == 'FREQ'):
-            print 'Spectral'
-            hout = change_to_velocity(strip_header(h,4))
-
-            else:
-                raise ValueError('Header should hold spectral information') 
+        h = pyfits.getheader(input_file)
         if (h['CTYPE3'] == 'FREQ'):
             hout = downsample_header(change_to_velocity(strip_header(h,4)))
         elif (h['CTYPE3'] == 'VELO-LSR'):
@@ -189,7 +176,7 @@ def main():
         pyfits.writeto(mom1_file,mom1,hmom,clobber=True)
         #Remove temporary files
         os.system("rm temp*")
-        """
+
 
 def do_chunk_fit(num,data,do_vel):
     """
@@ -269,7 +256,7 @@ def noise_est(spec):
     spectrum to avoid any residual single channel
     birdies in the data.
     """
-    spec = spec[int(0.2*len(spec)):int(0.8*len(spec))]
+    spec = spec[int(0.2*len(spec):0.8*len(spec))]
     if np.isnan(np.sum(spec)):
         noise_est = np.nan
     else:

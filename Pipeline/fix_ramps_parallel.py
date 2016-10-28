@@ -14,10 +14,12 @@ the process is fairly slow.
 Example:
 python fix_ramps_parallel_NH3.py 
        -i L30_Tile01-04_23694_MHz_line.fits 
-       -o L30_Tile01-04_fixed.fits -fv
+       -o L30_Tile01-04_fixed.fits -s 11 -n 16 -fv01
 
 -i : Input      -- Input file (reduced by pipeline)
 -o : Output     -- Output file 
+-s : Smooth     -- Size of kernel for median smooth
+-n : Numcores   -- Number of cores available for parallized computing
 -f : Fit        -- Flag to fit and remove baseline
 -v : Velocity   -- Flag to convert to velocity 
 -0 : Zeroth Moment Map -- Flag to produce a moment zero
@@ -46,13 +48,17 @@ import my_pad
 
 def main():
 
+    #Set 'numcores' to the default number of 
+    #processers available for parallelized 
+    #baselining and moment making.
+    numcores = 16
     output_file = "default.fits"
     do_fit = False
     do_vel = False
     do_mom0 = False
     do_mom1 = False
     try:
-        opts,args = getopt.getopt(sys.argv[1:],"i:o:fv01h")
+        opts,args = getopt.getopt(sys.argv[1:],"i:o:s:n:fv01h")
     except getopt.GetoptError,err:
         print(str(err))
         print(__doc__)
@@ -62,6 +68,10 @@ def main():
             input_file = a
         elif o == "-o":
             output_file = a
+        elif o == "-s":
+            filter_width = a
+        elif o == "-n":
+            numcores = a
         elif o == "-f":
             do_fit = True
         elif o == "-v":
@@ -81,10 +91,6 @@ def main():
     #Read in data into array, remove single-dimensional entries
     d,h = pyfits.getdata(input_file,header=True)
     d = np.squeeze(d)
-    import pdb
-    pdb.set_trace()
-    #Set 'numcores' to the number of processers available
-    numcores = 16 
 
     if do_fit:
         #Split the data
@@ -92,7 +98,10 @@ def main():
         ps = []
         #Fit baselines and write to temporary files
         for num in range(len(s)):
-            ps.append(multiprocessing.Process(target=do_chunk_fit,args=(num,s[num],do_vel)))
+            ps.append(multiprocessing.Process(target=do_chunk_fit,
+                                              args=(num,s[num],
+                                                    filter_width=filter_width,
+                                                    do_vel)))
         for p in ps:
             p.start()
         for p in ps:
@@ -106,17 +115,29 @@ def main():
             old_ref_channel =  float(hout['CRPIX3'])
             hout['CRPIX3'] = float(len(dout[:,1,1]))-old_ref_channel
         else:
-            hout = downsample_header(strip_header(h,4))
+            hout = downsample_header(strip_header(h[:],4))
 	hout['DATAMIN'] = -3.
         hout['DATAMAX'] = 3.
         pyfits.writeto(output_file,dout,hout,clobber=True)
         #Remove temporary files
         os.system("rm temp*")
     else:
-        dout = d
-        hout = h
+        dout = d[:]
+        hout = h[:]
     
     if do_mom0:
+        # Check that the header has spectral information
+        if (hout['CTYPE3'] == 'VELO-LSR'):
+            if (hout['NAXIS'] == 4):
+                hout = strip_header(hout[:],4)
+        elif (hout['CTYPE3'] == 'FREQ'):
+            if (hout['NAXIS'] == 4):
+                hout = change_to_velocity(strip_header(hout[:],4))
+            elif (hout['NAXIS'] == 3):
+                hout = change_to_velocity(hout[:])
+        else:
+            raise ValueError('Header should hold spectral information') 
+
         #Split the data
         s = np.array_split(dout, numcores, 2)
         ps = []
@@ -132,8 +153,8 @@ def main():
         mom0 = recombine_moments(numcores)
         mom0[np.where(mom0 == 0)] = np.nan
         mom0_file = output_file[0:-5]+"_mom0.fits"  
-        #Update input header
-        hmom = strip_header(h,3)
+        #Update header and write the data
+        hmom = strip_header(hout[:],3)
         hmom['BUNIT'] = 'K*km/s'
         hmom['DATAMIN'] = 0.
        	hmom['DATAMAX'] = 20.
@@ -143,32 +164,22 @@ def main():
 
         
     if do_mom1:
-        """
-        hout = pyfits.getheader(output_file)
-        if (h['CTYPE3'] == 'VELO-LSR'):
-            if (h['NAXIS'] == 3):
-                hout = h
-            elif (h['NAXIS'] == 4):
-                hout = strip_header(h,4)
-        elif (h['CTYPE3'] == 'FREQ'):
-            print 'Spectral'
-            hout = change_to_velocity(strip_header(h,4))
-
-            else:
-                raise ValueError('Header should hold spectral information') 
-        if (h['CTYPE3'] == 'FREQ'):
-            hout = downsample_header(change_to_velocity(strip_header(h,4)))
-        elif (h['CTYPE3'] == 'VELO-LSR'):
-            if (h['NAXIS'] == 3):
-                hout = h
-            elif (h['NAXIS'] == 4):
-                hout = strip_header(h,4)
-            else:
-                raise ValueError('Header should hold frequency or velocity information') 
+        # Check that the header has spectral information
+        if (hout['CTYPE3'] == 'VELO-LSR'):
+            if (hout['NAXIS'] == 4):
+                hout = strip_header(hout[:],4)
+        elif (hout['CTYPE3'] == 'FREQ'):
+            if (hout['NAXIS'] == 4):
+                hout = change_to_velocity(strip_header(hout[:],4))
+            elif (hout['NAXIS'] == 3):
+                hout = change_to_velocity(hout[:])
         else:
-            raise ValueError('Header should hold frequency or velocity information')
+            raise ValueError('Header should hold spectral information') 
+
+        #Split the data
         s = np.array_split(dout, numcores, 2)
         ps = []
+        #Create velocity maps and write to temporary files
         for num in range(len(s)):
             ps.append(multiprocessing.Process(target=do_chunk_mom1,args=(num,s[num],hout)))
         for p in ps:
@@ -176,10 +187,12 @@ def main():
         
         for p in ps:
             p.join()
+        #Recombine temporary files
         mom1 = recombine_moments(numcores)
         mom1[np.where(mom1 == 0)] = np.nan
         mom1_file = output_file[0:-5]+"_mom1.fits"
-        hmom = strip_header(hout,3)
+        #Update header and write the data
+        hmom = strip_header(hout[:],3)
         hmom['BUNIT'] = 'km/s'
         good_data_mom1 = mom1[np.where(np.isfinite(mom1))]
         mom1_min = np.min(good_data_mom1)
@@ -189,23 +202,24 @@ def main():
         pyfits.writeto(mom1_file,mom1,hmom,clobber=True)
         #Remove temporary files
         os.system("rm temp*")
-        """
 
-def do_chunk_fit(num,data,do_vel):
+
+def do_chunk_fit(num,data,filter_width,do_vel):
     """
-    Basic command to process data
-    apply_along_axis is the fastest way
-    I have found to do this.
+    Use apply_along_axis to apply 
+    baseline fitting to each spectrum in 
+    this chunk of the cube.
     """
-    ya =  np.apply_along_axis(baseline_and_deglitch,0,data,do_vel)
+    ya =  np.apply_along_axis(baseline_and_deglitch,0,data,
+                              filter_width=filter_width,do_vel)
     pyfits.writeto("temp"+str(num)+".fits",ya,clobber=True)
     
     
 def do_chunk_mom0(num,data,header):
     """
-    Basic command to process data
-    apply_along_axis is the fastest way
-    I have found to do this.
+    Use apply_along_axis to calculate 
+    the integrated intensity of each 
+    spectrum in this chunk of the cube.
     """
     ya =  np.ma.apply_along_axis(sum_over_signal,0,data)
     ya = ya.data
@@ -217,9 +231,9 @@ def do_chunk_mom0(num,data,header):
     
 def do_chunk_mom1(num,data,header):
     """
-    Basic command to process data
-    apply_along_axis is the fastest way
-    I have found to do this.
+    Use apply_along_axis to calculate 
+    the integrated intensity of each 
+    spectrum in this chunk of the cube.
     """
     ya =  np.ma.apply_along_axis(first_moment,0,data,header)
     ya = ya.data
@@ -280,16 +294,20 @@ def noise_est(spec):
     return noise_est
 
 def fit_baseline(masked,xx,ndeg=2):
+    """
+    Fit the masked array with a polynomial of 
+    the given order.
+    """
     ya = ma.polyfit(xx,masked,ndeg)
     basepoly = np.poly1d(ya)
     return(basepoly)
 
-def find_best_baseline(masked,xx,max_order,prior_penalty):
+def find_best_baseline(masked,xx,max_order=7,prior_penalty=1):
     """
     Consider polynomial baselines up to order max_order.
     Select the baseline with the lowest reduced chi-squared, 
-    where we have added an extra penalty for increasing more
-    degrees of freedom (prior_penalty). 
+    where prior_penalty can be used to increase the penalty
+    for fitting with a higher order baseline. 
     """
     chisqs = np.zeros(max_order)
     ndegs = np.arange(max_order)
@@ -306,7 +324,7 @@ def baseline_and_deglitch(orig_spec,
                           ww=25,
                           sigma_cut=1.5,
                           poly_n=2.,
-                          filter_width=11.,
+                          filter_width=1,
                           max_order=7,
                           prior_penalty=1.):
     """
@@ -337,7 +355,7 @@ def baseline_and_deglitch(orig_spec,
     masked = ma.masked_where(stds > med_std+sigma_cut*sigma_s,smoothed)
     xx = np.arange(masked.size)
     xx = xx.astype(np.float32) #To avoid bug with ma.polyfit in np1.6
-    npoly = find_best_baseline(masked,xx,max_order,prior_penalty)
+    npoly = find_best_baseline(masked,xx)
     basepoly = fit_baseline(masked,xx,ndeg=npoly)
     #Some kludgy code to refactor the baseline polynomial to
     #the full size spectra
@@ -363,7 +381,7 @@ def baseline_and_deglitch(orig_spec,
     return(final)
 
 
-def downsample_header(h,filter_width=11):
+def downsample_header(h,filter_width=1):
     """
     Since we downsample our spectra by a factor 
     of filter_width we have to change the header as well.
@@ -451,21 +469,8 @@ def sum_over_signal(spec,nsig=3.):
             else:
                 temp_masked[i] = ma.masked
         masked = ma.masked_where(np.ma.getmask(temp_masked), masked) 
-
-        """
-        Mask the edge 5% of the spectrum. This should mask the
-        passband shape if it is present in the data. 
-        ***Need to make sure we aren't masking high velocity signal***
-        """
-        try:
-            masked.mask[0:int(0.05*len(masked))] = True
-            masked.mask[int(0.95*len(masked)):len(masked)] = True
-        except TypeError:
-            masked.mask = False
-            masked.mask[0:int(0.05*len(masked))] = True
-            masked.mask[int(0.95*len(masked)):len(masked)] = True
-        mom0 = ma.sum(masked)
-    return(mom0)
+        spec_sum = ma.sum(masked)
+    return(spec_sum)
 
 def first_moment(spec,h,nsig=3.):
     """
@@ -485,19 +490,6 @@ def first_moment(spec,h,nsig=3.):
         sigma = noise_est(spec)
         #Mask out noise for first moment
         masked = ma.masked_where(spec < nsig*sigma,spec)
-
-        """
-	Mask the edge 5% of the spectrum. This should mask the
-        passband shape if it is present in the data.
-        ***Need to make sure we aren't masking high velocity signal***
-        """
-        try:
-            masked.mask[0:int(0.05*len(masked))] = True
-            masked.mask[int(0.95*len(masked)):len(masked)] = True
-        except TypeError:
-            masked.mask = False
-            masked.mask[0:int(0.05*len(masked))] = True
-            masked.mask[int(0.95*len(masked)):len(masked)] = True
 
         """
 	Require that each unmasked channel be contiguous with two
@@ -524,7 +516,7 @@ def first_moment(spec,h,nsig=3.):
         masked = ma.masked_where(np.ma.getmask(temp_masked), masked)
 
         """
-        Create a masked spectrum of signal*velocity to calculate 
+        Create a masked spectrum of data*velocity to calculate 
         the first moment.
         """
         temp_masked = ma.zeros(ma.shape(masked))
