@@ -12,7 +12,7 @@ This version runs in parallel, which is useful because
 the process is fairly slow.
 
 Example:
-python OutputBaselinedData.py 
+python output_baselined_data.py 
        -i L30_Tile01_23694_MHz_line.fits 
        -o L30_Tile01_NH3_1-1 -s 11 -w 6 -n 16 -p 2 -f01
 
