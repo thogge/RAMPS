@@ -4,11 +4,9 @@
 OutputBaselinedData.py
 
 Fit baselines and remove glitches/spikes from RAMPS data.
-Transforms to velocity axis. Outputs mask, baseline, baselined
-data, relative diff between rms and sig_diff, oversmoothed data 
-used for fit, and the polynomial order of baseline fit. Optionally 
-outputs a (masked) moment zero (integrated intensity map) and 
-first moment (velocity field).
+Transforms to velocity axis. Outputs baseline-subtracted data cube. 
+Optionally outputs a (masked) moment zero map (integrated intensity) 
+and first moment map (velocity field).
 
 This version runs in parallel, which is useful because
 the process is fairly slow.
@@ -16,20 +14,22 @@ the process is fairly slow.
 Example:
 python OutputBaselinedData.py 
        -i L30_Tile01_23694_MHz_line.fits 
-       -o L30_Tile01 -s 11 -v 6 -b 55 -n 16 -p 2 -01
+       -o L30_Tile01_NH3_1-1 -s 11 -w 6 -n 16 -p 2 -f01
 
--i : Input      -- Input file (reduced by pipeline)
--o : Output     -- Output file 
--s : Smooth     -- Size of kernel for median smooth
--b : Big smooth -- Size of oversmoothing kernel for baseline fit
--n : Numcores   -- Number of cores available for parallized computing
--v : Windwidth  -- 1/2 width of rolling window used for baseline fit mask
--p : Max order  -- Highest order polynomial with which to fit
--0 : Zeroth Moment Map -- Flag to produce a moment zero
-                   map (called Ouput+_mom0.fits)
--1 : First Moment Map -- Flag to produce a first moment
-                   map (called Ouput+_mom1.fits)
--h : Help       -- Display this help
+-i : Input              -- Input file (reduced by pipeline)
+-o : Output             -- Output file base name
+-s : Smooth             -- Size of kernel for median smooth
+-n : Numcores           -- Number of cores available for parallized computing
+-w : Window HalfWidth   -- 1/2 width of rolling window used for baseline 
+                           fit mask
+-p : Max order          -- Highest order polynomial with which to fit
+-f : Perform fit        -- Flag to produce a data cube with a baseline
+                           removed (called Ouput+_cube.fits)
+-0 : Zeroth Moment Map  -- Flag to produce a moment zero
+                           map (called Ouput+_mom0.fits)
+-1 : First Moment Map   -- Flag to produce a first moment
+                           map (called Ouput+_mom1.fits)
+-h : Help               -- Display this help
 
 """
 
@@ -38,18 +38,17 @@ python OutputBaselinedData.py
 
 import sys,os,getopt
 try:
-    import astropy.io.fits as pyfits
+    import astropy.io.fits as fits
 except:
-    import pyfits
+    import fits
 import scipy.ndimage as im
 import numpy as np
 import numpy.ma as ma
 import scipy.signal as si
 import matplotlib.pyplot as plt
-import multiprocessing, logging
+import multiprocessing as mp
 import my_pad
 import pdb
-from datetime import datetime
 
 def main():
 
@@ -58,14 +57,12 @@ def main():
     numcores = 1
     max_order = 2
     filter_width = 1
-    big_filter_width = 1
-    vv = 15
+    window_halfwidth = 15
     do_fit = False
     do_mom0 = False
     do_mom1 = False
-    keep = False
     try:
-        opts,args = getopt.getopt(sys.argv[1:],"i:o:s:b:n:u:v:w:p:m:f01kh")
+        opts,args = getopt.getopt(sys.argv[1:],"i:o:s:n:w:p:f01h")
     except getopt.GetoptError:
         print("Invalid key")
         print(__doc__)
@@ -75,14 +72,12 @@ def main():
             input_file = a
         elif o == "-o":
             output_base = a
-        elif o == "-s":
-            filter_width = int(a)
-        elif o == "-b":
-            big_filter_width = int(a)
         elif o == "-n":
             numcores = int(a)
-        elif o == "-v":
-            vv = int(a)
+        elif o == "-s":
+            filter_width = int(a)
+        elif o == "-w":
+            window_halfwidth = int(a)
         elif o == "-p":
             max_order = int(a)
         elif o == "-f":
@@ -91,8 +86,6 @@ def main():
             do_mom0 = True
         elif o == "-1":
             do_mom1 = True
-        elif o == "-k":
-            keep = True
         elif o == "-h":
             print(__doc__)
             sys.exit(1)
@@ -100,67 +93,52 @@ def main():
             assert False, "unhandled option"
             print(__doc__)
             sys.exit(2)
-    t1 = datetime.now()
+
     #Read in data into array, remove single-dimensional entries
-    d,h = pyfits.getdata(input_file,header=True,memmap=False)
+    d,h = fits.getdata(input_file,header=True,memmap=False)
     d = np.squeeze(d)
     if do_fit:
+        """
+        Check that numcores does not exceed the number 
+        of cores available
+        """
+        avail_cores = mp.cpu_count()
+        if numcores > avail_cores:
+            print("numcores variable exceeds the available number of cores.")
+            print("Setting numcores equal to "+str(avail_cores))
+            numcores = avail_cores
         #Fit baselines and write to temporary files
         if numcores > 1:
             s = np.array_split(d, numcores, 2)
-            ps = []
+            procs = []
             for num in range(len(s)):
-                ps.append(multiprocessing.Process(target=do_chunk,
-                                                  args=(num,s[num],vv,
-                                                        max_order,
-                                                        filter_width,
-                                                        big_filter_width,
-                                                        keep)))
-            for p in ps:
-                p.start()
-            for p in ps:
-                p.join()
+                procs.append(mp.Process(target=do_chunk,
+                                         args=(num,s[num],
+                                         window_halfwidth,
+                                         max_order,
+                                         filter_width)))
+            for proc in procs:
+                proc.start()
+            for proc in procs:
+                proc.join()
         else:
-            do_chunk(0,d,vv,max_order,filter_width,big_filter_width,keep)
+            do_chunk(0,d,window_halfwidth,max_order,filter_width)
         #Recombine baselined temporary files 
-        if keep:
-            mask_cube = recombine_a(numcores)
-            baseline_cube = recombine_b(numcores)
-            temp_cube = recombine_c(numcores)
-            rdiff_map = recombine_d(numcores)
-            npoly_map = recombine_e(numcores)
-            fixed_cube = recombine_f(numcores)
-        else:
-            fixed_cube = recombine_f(numcores)
+        baselined_cube = recombine(numcores,"cube")
     
         #Edit headers, write data
-        if keep:
-            hout_temp = downsample_header(change_to_velocity(strip_header(h[:],4)),big_filter_width)
-            hout_temp['DATAMIN'] = -3
-            hout_temp['DATAMAX'] = 3
-            pyfits.writeto(output_base+'_mask.fits',mask_cube,hout_temp,overwrite=True)
-            pyfits.writeto(output_base+'_baseline.fits',baseline_cube,hout_temp,overwrite=True)
-            pyfits.writeto(output_base+'_temp.fits',temp_cube,hout_temp,overwrite=True)
-            hout = downsample_header(change_to_velocity(strip_header(h[:],4)),filter_width)
-            pyfits.writeto(output_base+'_fixed.fits',fixed_cube,hout,overwrite=True)
-            hout2 = strip_header(hout[:],3)
-            hout2['DATAMIN'] = -0.05
-            hout2['DATAMAX'] = 0.05
-            pyfits.writeto(output_base+'_rdiff.fits',rdiff_map,hout2,overwrite=True)
-            hout2['DATAMIN'] = 0
-            hout2['DATAMAX'] = np.nanmax(npoly_map)
-            pyfits.writeto(output_base+'_npoly.fits',npoly_map,hout2,overwrite=True)
-            os.system("rm temp*")
+        hout = downsample_header(change_to_velocity(strip_header(h[:],4)),
+                                 filter_width)
+        if '.fits' in output_base:
+            fits.writeto(output_base,baselined_cube,hout,overwrite=True)
         else:
-            hout = downsample_header(change_to_velocity(strip_header(h[:],4)),filter_width)
-            if '.fits' in output_base:
-                pyfits.writeto(output_base,fixed_cube,hout,overwrite=True)
-            else:
-                pyfits.writeto(output_base+'_fixed.fits',fixed_cube,hout,overwrite=True)
-            os.system("rm tempf*")
+            fits.writeto(output_base+'_cube.fits',
+                         baselined_cube,hout,overwrite=True)
+        #Remove temporary files
+        delete_temporary_files("cube",numcores)
 
     else:
-        fixed_cube = d
+        baselined_cube = d
         hout = h[:]
     
     if do_mom0:
@@ -176,34 +154,41 @@ def main():
         else:
             raise ValueError('Header should hold spectral information') 
 
+        """
+        Check that numcores does not exceed the number 
+        of cores available
+        """
+        avail_cores = mp.cpu_count()
+        if numcores > avail_cores:
+            print("numcores variable exceeds the available number of cores.")
+            print("Setting numcores equal to "+str(avail_cores))
+            numcores = avail_cores
         if numcores > 1:
             #Split the data
-            s = np.array_split(fixed_cube, numcores, 2)
-            ps = []
+            s = np.array_split(baselined_cube, numcores, 2)
+            procs = []
             #Create integrated intensity maps and write to temporary files
             for num in range(len(s)):
-                ps.append(multiprocessing.Process(target=do_chunk_mom0,
-                                                  args=(num,s[num],hout)))
-            for p in ps:
-                p.start()
+                procs.append(mp.Process(target=do_chunk_mom0,
+                                        args=(num,s[num],hout)))
+            for proc in procs:
+                proc.start()
                 
-            for p in ps:
-                p.join()
+            for proc in procs:
+                proc.join()
         else:          
-            do_chunk_mom0(0,fixed_cube,hout)
-       #Recombine temporary files
-        mom0 = recombine_moments(numcores)
-        mom0[np.where(mom0 == 0)] = np.nan
+            do_chunk_mom0(0,baselined_cube,hout)
+        #Recombine temporary files
+        mom0 = recombine(numcores,"mom0")
         mom0_file = output_base+"_mom0.fits"  
         #Update header and write the data
         hmom = strip_header(hout[:],3)
         hmom['BUNIT'] = 'K*km/s'
         hmom['DATAMIN'] = 0.
        	hmom['DATAMAX'] = 20.
-        pyfits.writeto(mom0_file,mom0,hmom,overwrite=True)  
+        fits.writeto(mom0_file,mom0,hmom,overwrite=True)  
         #Remove temporary files
-        os.system("rm temp*")
-
+        delete_temporary_files("mom0",numcores)
         
     if do_mom1:
         # Check that the header has spectral information
@@ -218,105 +203,86 @@ def main():
         else:
             raise ValueError('Header should hold spectral information') 
 
+        """
+        Check that numcores does not exceed the number 
+        of cores available
+        """
+        avail_cores = mp.cpu_count()
+        if numcores > avail_cores:
+            print("numcores variable exceeds the available number of cores.")
+            print("Setting numcores equal to "+str(avail_cores))
+            numcores = avail_cores
         if numcores > 1:
             #Split the data
-            s = np.array_split(fixed_cube, numcores, 2)
-            ps = []
+            s = np.array_split(baselined_cube, numcores, 2)
+            procs = []
             #Create velocity maps and write to temporary files
             for num in range(len(s)):
-                ps.append(multiprocessing.Process(target=do_chunk_mom1,
-                                                  args=(num,s[num],hout)))
-            for p in ps:
-                p.start()
+                procs.append(mp.Process(target=do_chunk_mom1,
+                                        args=(num,s[num],hout)))
+            for proc in procs:
+                proc.start()
         
-            for p in ps:
-                p.join()
+            for proc in procs:
+                proc.join()
         else:
-            do_chunk_mom1(0,fixed_cube,hout)
+            do_chunk_mom1(0,baselined_cube,hout)
         #Recombine temporary files
-        mom1 = recombine_moments(numcores)
-        mom1[np.where(mom1 == 0)] = np.nan
+        mom1 = recombine(numcores,"mom1")
         mom1_file = output_base+"_mom1.fits"
         #Update header and write the data
         hmom = strip_header(hout[:],3)
         hmom['BUNIT'] = 'km/s'
-        good_data_mom1 = mom1[np.where(np.isfinite(mom1))]
-        try:
-            mom1_min = np.min(good_data_mom1)
-            mom1_max = np.max(good_data_mom1)
-        except:
-            mom1_min = 0.
-            mom1_max = 0.            
-        hmom['DATAMIN'] = mom1_min
-        hmom['DATAMAX'] = mom1_max
-        pyfits.writeto(mom1_file,mom1,hmom,overwrite=True)
+        hmom['DATAMIN'] = np.nanmin(mom1)
+        hmom['DATAMAX'] = np.nanmax(mom1)
+        fits.writeto(mom1_file,mom1,hmom,overwrite=True)
         #Remove temporary files
-        os.system("rm temp*")
+        delete_temporary_files("mom1",numcores)
 
-    t2 = datetime.now()
-    print('Elapsed time: '+str(t2-t1))
 
-def do_chunk(num,data,vv,max_order,filter_width,big_filter_width,keep):
+def do_chunk(num,data,window_halfwidth,max_order,filter_width):
     """
-    Use apply_along_axis to apply 
-    baseline fitting to each spectrum in 
+    Loop over the pixels in a data cube and apply the
+    baseline fitting function to each spectrum in 
     this chunk of the cube.
     """
-    #pdb.set_trace()
     print(num)
+    #Reverse the spectral axis to arange spectra from low to high LSR velocity
+    data = data[::-1,:,:]
     nax1 = data.shape[2]
     nax2 = data.shape[1]
     nax3 = len(data[:,0,0][::filter_width])
-    if keep:
-        ya = np.full((nax3,nax2,nax1,),np.nan)
-        yb = np.full((nax3,nax2,nax1,),np.nan)
-        yc = np.full((nax3,nax2,nax1,),np.nan)
-        yd = np.full((nax2,nax1,),np.nan)
-        ye = np.full((nax2,nax1,),np.nan)
-        yf = np.full((nax3,nax2,nax1,),np.nan)
-    else:
-        yd = np.full((nax2,nax1,),np.nan)
-        yf = np.full((nax3,nax2,nax1,),np.nan)
-    rel_err_sig = 0.00404*(filter_width)**(0.5)
+    outcube = np.full((nax3,nax2,nax1,),np.nan)
+    """
+    rel_diff_std is the standard deviation of rel_diff for a large 
+    number of simulated spectra that have no residual baseline. If a 
+    baseline subtracted spectrum has an rel_diff value significantly 
+    above this value, then it likely contains a significant residual 
+    baseline.
+    """
+    rel_diff_std = 0.00404*(filter_width)**(0.5)
     nsig = 5.
     for i in range(nax2):
         for j in range(nax1):
-            #if j==0:
-            #print (float(i)*nax1+float(j)+1)/(nax1*nax2)
-            orig_spec = data[::-1,i,j]
-            #print num, i,j, orig_spec[len(orig_spec)/2]
-            #pdb.set_trace()
-            if keep:
-                if np.isfinite(orig_spec[len(orig_spec)/2]):
-                    ya[:,i,j],yb[:,i,j],yc[:,i,j],yd[i,j],ye[i,j],yf[:,i,j] = fit_wrapper(orig_spec,vv,max_order,filter_width,filter_width,keep)
-                    if yd[i,j] > nsig*rel_err_sig:
-                        #print 'test1'
-                        ya[:,i,j],yb[:,i,j],yc[:,i,j],yd[i,j],ye[i,j],yf[:,i,j] = fit_wrapper(orig_spec,3*vv,max_order,filter_width,filter_width,keep)
-                        if yd[i,j] > nsig*rel_err_sig:
-                            #print 'test2'
-                            ya[:,i,j],yb[:,i,j],yc[:,i,j],yd[i,j],ye[i,j],yf[:,i,j] = fit_wrapper(orig_spec,3*vv,0,filter_width,filter_width,keep)
-            else:
-                if np.isfinite(orig_spec[len(orig_spec)/2]):
-                    yd[i,j],yf[:,i,j] = fit_wrapper(orig_spec,vv,max_order,filter_width,filter_width,keep)
-                    if yd[i,j] > nsig*rel_err_sig:
-                        #print 'test1'
-                        yd[i,j],yf[:,i,j] = fit_wrapper(orig_spec,3*vv,max_order,filter_width,filter_width,keep)
-                        if yd[i,j] > nsig*rel_err_sig:
-                            #print 'test2'
-                            yd[i,j],yf[:,i,j] = fit_wrapper(orig_spec,3*vv,0,filter_width,filter_width,keep)
-    if keep:
-        pyfits.writeto("tempa"+str(num)+".fits",ya,overwrite=True)
-        pyfits.writeto("tempb"+str(num)+".fits",yb,overwrite=True)
-        pyfits.writeto("tempc"+str(num)+".fits",yc,overwrite=True)
-        pyfits.writeto("tempd"+str(num)+".fits",yd,overwrite=True)
-        pyfits.writeto("tempe"+str(num)+".fits",ye,overwrite=True)
-        pyfits.writeto("tempf"+str(num)+".fits",yf,overwrite=True)
-    else:
-        pyfits.writeto("tempf"+str(num)+".fits",yf,overwrite=True)
+            if np.isfinite(data[int(data.shape[0]/2),i,j]):
+                rel_diff,outcube[:,i,j] = fit_wrapper(data[:,i,j],
+                                                      window_halfwidth,
+                                                      max_order,
+                                                      filter_width)
+                if rel_diff > nsig*rel_diff_std:
+                    rel_diff,outcube[:,i,j] = fit_wrapper(data[:,i,j],
+                                                          3*window_halfwidth,
+                                                          max_order,
+                                                          filter_width)
+                if rel_diff > nsig*rel_diff_std:
+                    rel_diff,outcube[:,i,j] = fit_wrapper(data[:,i,j],
+                                                          3*window_halfwidth,
+                                                          0,filter_width)
+    fits.writeto("cube_temp"+str(num)+".fits",outcube,overwrite=True)
     
 def do_chunk_mom0(num,data,header):
     """
-    Use apply_along_axis to calculate 
+    Loop over pixels to calculate 
     the integrated intensity of each 
     spectrum in this chunk of the cube.
     """
@@ -324,23 +290,19 @@ def do_chunk_mom0(num,data,header):
     hw = len(data[:,0,0])/2.
     for i in range(ya.shape[0]):
         for j in range(ya.shape[1]):
-            #print(i,j)
             if np.isfinite(data[int(hw),i,j]):
                 ya[i,j] = sum_over_signal(data[:,i,j])
-                #pdb.set_trace()
-            if ya[i,j] > 0.:
-                #print ya[i,j]
-                print(i,j)
     #Convert to K km/s. Assumes CTYPE3 is LSR Velocity
-    loc = np.where(ya>0.)
+    #loc = np.where(ya>0.)
     #print np.nansum(ya[loc])
-    good_data_locations = np.where(ya > 0.)
-    ya[good_data_locations] *= 0.001*abs(header['CDELT3'])
-    pyfits.writeto("temp"+str(num)+".fits",ya,overwrite=True)
+    #good_data_locations = np.where(ya > 0.)
+    #ya[good_data_locations] *= 0.001*abs(header['CDELT3'])
+    ya = ya*0.001*abs(header['CDELT3'])
+    fits.writeto("mom0_temp"+str(num)+".fits",ya,overwrite=True)
       
 def do_chunk_mom1(num,data,header):
     """
-    Use apply_along_axis to calculate 
+    Loop over pixels to calculate 
     the integrated intensity of each 
     spectrum in this chunk of the cube.
     """
@@ -348,99 +310,62 @@ def do_chunk_mom1(num,data,header):
     for i in range(ya.shape[0]):
         for j in range(ya.shape[1]):
             ya[i,j] = first_moment(data[:,i,j],header)
-            if ya[i,j] > -999.:
-                print(ya[i,j])
-    pyfits.writeto("temp"+str(num)+".fits",ya,overwrite=True)
+    fits.writeto("mom1_temp"+str(num)+".fits",ya,overwrite=True)
     
-def recombine_a(numparts,output_base="test_final.fits"):
+def recombine(numparts,output_base):
     """
     Recombine all the individual fits files into 
     one final image
     """
     indata = []
+    data_naxes = []
     for n in range(numparts):
-        d = pyfits.getdata("tempa"+str(n)+".fits")
+        d = fits.getdata(output_base+"_temp"+str(n)+".fits")
         indata.append(d)
-    final = np.dstack(indata)
+        data_naxes.append(len(d.shape))
+    data_naxes = np.asarray(data_naxes)
+    if (data_naxes == 3).all():
+        final = np.dstack(indata)
+    elif (data_naxes == 2).all():
+        final = np.column_stack(indata)
+    else:
+        print("FITS array chunks must all have 2 axes or all have 3 axes.")
     return(final)
+
+def delete_temporary_files(output_base,numcores):
+    for n in np.arange(numcores):
+        print("rm "+output_base+"_temp"+str(n)+".fits")
+        os.system("rm "+output_base+"_temp"+str(n)+".fits")
+
+
+def fit_wrapper(orig_spec,window_halfwidth,max_order,filter_width):
+    """
+    Wrapper that fits a polynomial baseline function to a spectrum
     
-def recombine_b(numparts,output_base="test_final.fits"):
+    Parameters
+    ----------
+    orig_spec : numpy array of floats
+        The original spectrum with full resolution.
+    window_halfwidth : int
+        Half of the window width used to mask the spectrum for fitting.
+    max_order : int
+        The maximum polynomial order allowed for baseline fitting.
+    filter_width : int
+        The smoothing factor. The resulting spectrum will have a length
+        reduced by a factor of filter_width.
+
+    Returns
+    -------
+    float
+        rel_diff value of baseline-subtracted spectrum. 
+    numpy array of floats
+        Baseline-subtracted spectrum.
     """
-    Recombine all the individual fits files into 
-    one final image
-    """
-    indata = []
-    for n in range(numparts):
-        d = pyfits.getdata("tempb"+str(n)+".fits")
-        indata.append(d)
-    final = np.dstack(indata)
-    return(final)
-    
-def recombine_c(numparts,output_base="test_final.fits"):
-    """
-    Recombine all the individual fits files into 
-    one final image
-    """
-    indata = []
-    for n in range(numparts):
-        d = pyfits.getdata("tempc"+str(n)+".fits")
-        indata.append(d)
-    final = np.dstack(indata)
-    return(final)
-    
-def recombine_d(numparts,output_base="test_final.fits"):
-    """
-    Recombine all the individual fits files into 
-    one final image
-    """
-    indata = []
-    for n in range(numparts):
-        d = pyfits.getdata("tempd"+str(n)+".fits")
-        indata.append(d)
-    final = np.column_stack(indata)
-    return(final)
-    
-def recombine_e(numparts,output_base="test_final.fits"):
-    """
-    Recombine all the individual fits files into 
-    one final image
-    """
-    indata = []
-    for n in range(numparts):
-        d = pyfits.getdata("tempe"+str(n)+".fits")
-        indata.append(d)
-    final = np.column_stack(indata)
-    return(final)
-    
-def recombine_f(numparts,output_base="test_final.fits"):
-    """
-    Recombine all the individual fits files into 
-    one final image
-    """
-    indata = []
-    for n in range(numparts):
-        d = pyfits.getdata("tempf"+str(n)+".fits")
-        indata.append(d)
-    final = np.dstack(indata)
-    return(final)
-    
-def recombine_moments(numparts,output_base="test_final.fits"):
-    """
-    Recombine all the individual fits files into 
-    one final image
-    """
-    indata = []
-    for n in range(numparts):
-        d = pyfits.getdata("temp"+str(n)+".fits")
-        indata.append(d)
-    final = np.column_stack(indata)
-    return(final)
-    
-def fit_wrapper(orig_spec,vv,max_order,filter_width,big_filter_width,keep):
-    #pdb.set_trace()
+    #Mask and smooth spectrum
     m = ma.masked_invalid(orig_spec)
     sm = im.median_filter(m,filter_width)[::filter_width]
-    masked= mask_for_baseline(sm,vv=vv)
+    masked= mask_for_baseline(sm,window_halfwidth=window_halfwidth)
+    #Get best-fit polynomial
     mm = masked.mask
     xx = np.arange(masked.size)
     basepoly = output_basepoly(masked,max_order=max_order)
@@ -448,6 +373,7 @@ def fit_wrapper(orig_spec,vv,max_order,filter_width,big_filter_width,keep):
     bp = basepoly(xx)
     xxx = np.arange(orig_spec.size)
     params = np.asarray(basepoly)
+    #Refactor best-fit parameters for unsmoothed spectrum
     rr = filter_width
     newparams = []
     for k,p in enumerate(params[::-1]):
@@ -455,13 +381,11 @@ def fit_wrapper(orig_spec,vv,max_order,filter_width,big_filter_width,keep):
     newparams = newparams[::-1]
     newpoly = np.poly1d(newparams)
     newbaseline = newpoly(xxx)
-    final = im.median_filter(orig_spec - newbaseline,filter_width)[::filter_width]
-    pd = rdiff(sm - bp,vv=vv)
-    #pdb.set_trace()
-    if keep:
-        return mm,bp,sm,pd,bpc,final
-    else:
-        return pd,final
+    #Subtract baseline and smooth spectrum
+    final = im.median_filter(orig_spec - newbaseline,
+                             filter_width)[::filter_width]
+    rel_diff = get_rel_diff(sm - bp)
+    return(rel_diff,final)
 
 def fit_baseline(masked,xx,ndeg=2):
     """
@@ -482,22 +406,21 @@ def find_best_baseline(masked,xx,max_order=2,prior_penalty=1):
     chisqs = np.zeros(max_order+1)
     ndegs = np.arange(max_order+1)
     for i,ndeg in enumerate(ndegs):
-        #print ndeg
         basepoly = fit_baseline(masked,xx,ndeg=ndeg)
-        #print basepoly
         base = basepoly(xx)
         chisqs[i] = np.sum((masked-base)**2)/(ma.count(masked)
                                               -prior_penalty*ndeg)
     
     return(np.argmin(chisqs))
     
-def output_basepoly(masked,
-                    max_order=2,
-                    prior_penalty=1.):
-
+def output_basepoly(masked,max_order=2,prior_penalty=1.):
+    """
+    Returns the polynomial coefficients of the best-fit baseline model.
+    """
     xx = np.arange(masked.size)
     xx = xx.astype(np.float32) #To avoid bug with ma.polyfit in np1.6
-    npoly = find_best_baseline(masked,xx,max_order=max_order)
+    npoly = find_best_baseline(masked,xx,max_order=max_order,
+                               prior_penalty=prior_penalty)
     basepoly = fit_baseline(masked,xx,ndeg=npoly)
 
     return(basepoly)
@@ -511,110 +434,136 @@ def rolling_window(a,window):
     """
     shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)    
     strides = a.strides+(a.strides[-1],)
-    return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
+    return(np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides))
 
-def mask_for_baseline(spec,sigma_cut=1.5,vv=30):
-    ya = rolling_window(spec,vv*2)
-    #Calculate standard dev and pad the output
-    stds = my_pad.pad(np.nanstd(ya,-1),(vv-1,vv),mode='edge')
+def mask_for_baseline(spec,sigma_cut=1.5,window_halfwidth=15):
+    """
+    Mask the spectral channels that contain signal. Search for 
+    signal by comparing the local standard deviation within a 
+    window width of 2*window_halfwidth to the median local standard deviation 
+    in all windows throughout the spectrum.
+    """
+    ya = rolling_window(spec,window_halfwidth*2)
+    #Calculate local standard dev for each channel and pad the output
+    stds = my_pad.pad(np.nanstd(ya,-1),(window_halfwidth-1,window_halfwidth),
+                      mode='edge')
 
     #Figure out which bits of the spectrum have signal/glitches
     med_std = np.nanmedian(stds)
     std_std = np.nanstd(stds)
-    sigma_x_bar = med_std/np.sqrt(vv)
+    sigma_x_bar = med_std/np.sqrt(window_halfwidth)
     sigma_s = (1./np.sqrt(2.))*sigma_x_bar
 
     #Mask out signal for baseline
-    masked = ma.masked_where(np.logical_or(stds > med_std+sigma_cut*sigma_s,np.isnan(spec)),spec)
-    #if ma.is_masked(masked):
-    #    masked.mask[1:-1] = ~(~masked.mask[2:]*~masked.mask[:-2]*~masked.mask[1:-1])
-    temp_masked= ma.zeros(ma.shape(masked))
-    w = 10
+    masked = ma.masked_where(np.logical_or(stds > med_std+sigma_cut*sigma_s,
+                                           np.isnan(spec)),spec)
+    #Mask 10 channels around each masked channel to capture faint line wings
     if ma.is_masked(masked):
-        for i in range(w,len(masked)-w):
-            if (ma.getmask(masked)[i] == True):
-                temp_masked[i-w:i+w+1] = ma.masked
-    masked = ma.masked_where(np.ma.getmask(temp_masked), masked)
-    return masked
+        where_masked = np.where(masked.mask)[0]
+        mask_extension = 10
+        for channel in where_masked:
+            masked[slice(channel-10,channel+10,1)] = ma.masked
+    return(masked)
 
 def mask_for_moment(spec,nsig=3.):
-    sigma = rms(spec)
-    masked = ma.masked_where(np.logical_or(spec < nsig*sigma,np.isnan(spec)),spec)
-    ww = np.where(masked.mask == False)[0]
-    absdiff = abs(np.diff(ww))
+    """
+    Mask the regions of a spectrum that do not contain signal for 
+    the purpose of moment analysis. 
+    """
+    #Calculate the noise and mask channels with intensity less than nsig*noise
+    noise = get_rms(spec)
+    masked = ma.masked_where(np.logical_or(spec < nsig*noise,
+                                           np.isnan(spec)),spec)
+    #Locate the unmasked channels if present
+    unmasked_loc = np.where(masked.mask == False)[0]
+    absdiff = abs(np.diff(unmasked_loc))
     if 1 not in absdiff:
         masked = ma.masked_inside(spec,-np.inf,np.inf)
     else:
-        for i,ii in enumerate(ww):
+        """
+        Real signal exhibits significant emission over several channels. Mask
+        unmasked channels that are not contiguous with two other unmasked 
+        channels.
+        """
+        for i,ii in enumerate(unmasked_loc):
             if i==0:
                 crit = (absdiff[i] != 1)
-            elif i==len(ww)-1:
+            elif i==len(unmasked_loc)-1:
                 crit = (absdiff[i-1] != 1)
             else:
                 crit = (absdiff[i] != 1 and absdiff[i-1] != 1) 
             if crit:
                 masked.mask[ii] = True
-    return masked
+    return(masked)
 
 
 def mask_for_rms(spec,nsig=3.):
-    sigma = noise_est(spec)
-    masked = ma.masked_where(np.logical_or(spec > nsig*sigma,np.isnan(spec)),spec)
-    temp_masked= ma.zeros(ma.shape(masked))
-    w = 10
+    """
+    Mask the signal in a spectrum for the purpose of calculating the rms
+    noise. Use the noise_est to estimate the noise for masking. This method
+    is susceptible to error in the presence of bright, narrow line emission
+    (such as maser emission), so estimating the noise a second time from the 
+    masked data is more accurate.
+    """
+    #First calculate the noise estimate from the unmasked array 
+    noise = noise_est(spec)
+    masked = ma.masked_where(np.logical_or(spec > nsig*noise,
+                                           np.isnan(spec)),spec)
+    #Mask 10 channels around each masked channel to capture faint line wings
     if ma.is_masked(masked):
-        for i in range(w,len(masked)-w):
-            if (ma.getmask(masked)[i] == True):
-                temp_masked[i-w:i+w+1] = ma.masked
-    masked = ma.masked_where(np.ma.getmask(temp_masked), masked)
+        where_masked = np.where(masked.mask)[0]
+        mask_extension = 10
+        for channel in where_masked:
+            masked[slice(channel-10,channel+10,1)] = ma.masked
 
-    sigma = noise_est(masked)
-    masked = ma.masked_where(np.logical_or(spec > nsig*sigma,np.isnan(spec)),spec)
-    temp_masked= ma.zeros(ma.shape(masked))
+    #Calculate the noise estimate from the masked array 
+    noise = noise_est(masked)
+    masked = ma.masked_where(np.logical_or(spec > nsig*noise,
+                                           np.isnan(spec)),spec)
+    #Mask 10 channels around each masked channel to capture faint line wings
     if ma.is_masked(masked):
-        for i in range(w,len(masked)-w):
-            if (ma.getmask(masked)[i] == True):
-                temp_masked[i-w:i+w+1] = ma.masked
-    masked = ma.masked_where(np.ma.getmask(temp_masked), masked)
+        where_masked = np.where(masked.mask)[0]
+        mask_extension = 10
+        for channel in where_masked:
+            masked[slice(channel-10,channel+10,1)] = ma.masked
     return(masked)
 
-def rms(spec):
+def get_rms(spec):
     if len(np.where(np.isnan(spec))[0]) == len(spec):
         rms = np.nan
     else:
         m = mask_for_rms(spec)
-        antimask = (m.mask-1)*-1
-        s = m.data*antimask
-        s[np.where(s == 0)]=np.nan
-        rms = (np.nanmean(s**2))**(0.5)
-    return rms
+        rms = (m**2).mean()**(0.5)
+    return(rms)
 
 def noise_est(spec):
     """
     Estimates the noise in a spectrum by the 
-    channel-to-channel variations. Perform this
-    function on only the inner portion of the 
-    spectrum to avoid any residual single channel
-    birdies in the data.
+    channel-to-channel differences.
     """
     diff = np.diff(spec)
     noise_est = np.sqrt(np.nanmean(diff*diff)/2.)
-    return noise_est
+    return(noise_est)
 
-def rdiff(spec,vv):
-    #m = mask_for_baseline(spec,vv=vv)
+def get_rel_diff(spec):
+    """
+    Calculates the relative difference between the 
+    rms and the noise estimate from channel-to-channel
+    differences. The rms is affected by residual baseline, 
+    while the channel-to-channel differences are not. 
+    Fitted spectra with larger rel_diff values have more
+    significant residual baselines.
+    """
     m = mask_for_rms(spec)
-    rd = 1-noise_est(m)/((np.nanmean(m**2))**(0.5))
-    #pdb.set_trace()
-    return rd
+    rel_diff = 1-noise_est(m)/((np.nanmean(m**2))**(0.5))
+    return(rel_diff)
 
 def downsample_header(h,filter_width=1):
     """
     Since we downsample our spectra by a factor 
     of filter_width we have to change the header as well.
-    Currently this is not well-integrated. filter_width 
-    here _needs_ to be the same as filter_width in
-    baseline_and_deglitch
+    filter_width here _needs_ to be the same as 
+    filter_width in baseline_and_deglitch
     """
     h['CDELT3'] = h['CDELT3']*float(filter_width)
     h['CRPIX3'] = h['CRPIX3']/float(filter_width)
@@ -640,6 +589,10 @@ def strip_header(h,n):
     
     
 def change_to_velocity(h):
+    """
+    Change the spectral information in the header
+    from frequency to LSR velocity.
+    """
     if not ('RESTFREQ' in h):
         h.rename_keyword('RESTFRQ','RESTFREQ')
     else:
@@ -663,13 +616,10 @@ def change_to_velocity(h):
 def sum_over_signal(spec,nsig=5.):
     """
     Sum over regions of significant signal.
-    Could be modified to output a mask in order
-    to enable quick calculation of multiple moments.
     Run this on spectra that have already been
     baseline subtracted.
     """
-    #print(noise_est(spec))
-    if len(np.where(np.isnan(spec))[0]) == len(spec):
+    if np.isnan(spec).all():
         """
         If the spectrum is all nans, then it means we haven't
         mapped this location. Fill it with a large negative
@@ -679,8 +629,10 @@ def sum_over_signal(spec,nsig=5.):
         spec_sum=-999
     else:
         masked = mask_for_moment(spec)
+        """
+        Sum the unmasked channels.
+        """
         spec_sum = ma.sum(masked)
-
     return(spec_sum)
 
 def first_moment(spec,h,nsig=5.):
@@ -689,7 +641,7 @@ def first_moment(spec,h,nsig=5.):
     Run	this on	spectra	that have already been 
     baseline subtracted.
     """
-    if np.isnan(noise_est(spec)):
+    if np.isnan(spec).all():
         """
         If the spectrum is all nans, then it means we haven't
         mapped this location. Fill it with a large negative
@@ -700,21 +652,36 @@ def first_moment(spec,h,nsig=5.):
     else:
         #Mask out noise for first moment
         masked = mask_for_moment(spec)
-
         """
-        Create a masked spectrum of data*velocity to calculate 
-        the first moment.
+        Create the velocity axis and calculate the first moment 
+        using the unmasked channels.
         """
-        temp_masked = ma.zeros(ma.shape(masked))
-        temp_masked.mask = ma.getmask(masked)
-        vel_min = 0.001*(1 - h['CRPIX3'])*h['CDELT3'] + h['CRVAL3']
-        vel_max = 0.001*(len(masked) - h['CRPIX3'])*h['CDELT3'] + h['CRVAL3']
-        vel = np.linspace(vel_min,vel_max,len(masked),dtype=np.float)
-        for i,v in enumerate(vel):
-            temp_masked.data[i] = masked.data[i]*v
-        mom1 = ma.sum(temp_masked)/ma.sum(masked)
-        #pdb.set_trace()
+        vax = get_vax(h)
+        mom1 = (masked*vax).sum()/masked.sum()
     return(mom1)
+
+def c2v(c,h):
+    """
+    Use the header information to translate from channels to velocity.
+    """
+    v = ((c - (h['CRPIX3']-1))*h['CDELT3'] + h['CRVAL3'])*0.001
+    return(v)
+
+def v2c(v,h):
+    """
+    Use the header information to translate from velocity to channels.
+    """
+    c = ((v*1000. - h['CRVAL3'])/h['CDELT3'] + h['CRPIX3']-1)
+    return(int(round(c)))
+
+def get_vax(h):
+    """
+    Use the header information to calculate the velocity axis of a spectrum.
+    """
+    vmin = c2v(0,h)
+    vmax = c2v(h['NAXIS3']-1,h)
+    vax = np.linspace(vmin,vmax,h['NAXIS3'])
+    return(vax)
 
 if __name__ == '__main__':
     main()
