@@ -356,9 +356,9 @@ def fit_wrapper(orig_spec,window_halfwidth,max_order,filter_width):
 
     Returns
     -------
-    float
+    rel_diff : float
         rel_diff value of baseline-subtracted spectrum. 
-    numpy array of floats
+    final : ndarray
         Baseline-subtracted spectrum.
     """
     #Mask and smooth spectrum
