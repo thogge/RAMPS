@@ -40,7 +40,7 @@ import sys,os,getopt
 try:
     import astropy.io.fits as fits
 except:
-    import fits
+    import pyfits as fits
 import scipy.ndimage as im
 import numpy as np
 import numpy.ma as ma
