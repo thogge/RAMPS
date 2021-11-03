@@ -19,6 +19,7 @@ python combine_raw_fits_data.py -i map1.fits,map2.fits,map3.fits
 -i : Input     -- Comma-separated list of input files
 -o : Output    -- Output file
 -r : Regrid    -- Regrid template file
+-n : Numcores  -- Number of cores for parallel processing
 -c : Crop      -- Spatially crop nan values from input cubes
 -s : Spec Crop -- Spectrally crop edge channels from input cubes
 -p : Prefit    -- Fit cubes with 0th order baseline prior to combination
@@ -159,8 +160,8 @@ def main():
         if prefit:
             f_fit = f[:-5]+"_prefit.fits"
             execute_string = "python "+scripts_dir+\
-                             "fix_ramps_parallel_p0.py -i "+f+" -o "+f_fit+\
-                             " -f -n "+str(numcores)
+                             "prefit_raw_data_baselines.py -i "+f+\
+                             " -o "+f_fit+" -f -n "+str(numcores)
             print(execute_string)
             os.system(execute_string)
             f = f_fit
