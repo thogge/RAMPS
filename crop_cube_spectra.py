@@ -36,7 +36,7 @@ import pdb
 def main():
     #Defaults
     vel_crop = False
-    frq_crop = False
+    freq_crop = False
     try:
         opts,args = getopt.getopt(sys.argv[1:],"i:o:s:e:vfh")
     except getopt.GetoptError:
@@ -55,7 +55,7 @@ def main():
         elif o == "-v":
             vel_crop = True
         elif o == "-f":
-            frq_crop = True
+            freq_crop = True
         elif o == "-h":
             print(__doc__)
             sys.exit(1)
@@ -88,7 +88,7 @@ def main():
         else:
             print("Unrecognized header info")
             sys.exit(2)
-   elif frq_crop:
+   elif freq_crop:
         """
         If header does not contain frequency info, translate from 
         frequency to velocity before converting to channels.
@@ -174,8 +174,8 @@ def freq_to_vel(frequency,h):
     """
     if 'RESTFREQ' in h:
         f0 = h['RESTFREQ']
-    elif 'RESTFRQ' in h:
-        f0 = h['RESTFRQ']
+    elif 'RESTfreq' in h:
+        f0 = h['RESTfreq']
     velocity = 3e5*(1-(frequency/f0))
     return(velocity)
 
@@ -185,8 +185,8 @@ def vel_to_freq(velocity,h):
     """
     if 'RESTFREQ' in h:
         f0 = h['RESTFREQ']
-    elif 'RESTFRQ' in h:
-        f0 = h['RESTFRQ']
+    elif 'RESTfreq' in h:
+        f0 = h['RESTfreq']
     frequency = (f0)*(1-(velocity/3e5))
     return(frequency)
 
