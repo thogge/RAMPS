@@ -4,7 +4,9 @@ run_data_processing_pipeline.py
 Pipeline to combine and baseline subtract data cubes for all lines 
 observed by the RAMPS project. Tiles (individual observations) are
 combined to form fields (1 degree wide regions). Fields are 
-baseline subtracted to prepare the data cubes for analysis.
+baseline subtracted and moment maps and rms noise maps are created 
+to be used for future analysis.
+
 This pipeline utilizes the combine_raw_fits_data.py, 
 fix_header_restfreq.py, crop_cube_spectra.py, 
 output_baselined_data.py, and make_rms_map.py scripts.

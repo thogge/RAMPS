@@ -510,11 +510,11 @@ def mask_for_rms(spec,nsig=3.):
     masked = ma.masked_where(np.logical_or(spec > nsig*noise,
                                            np.isnan(spec)),spec)
     #Mask 10 channels around each masked channel to capture faint line wings
+    mask_ext = 10
     if ma.is_masked(masked):
         where_masked = np.where(masked.mask)[0]
-        mask_extension = 10
         for channel in where_masked:
-            masked[slice(channel-10,channel+10,1)] = ma.masked
+            masked[slice(channel-mask_ext,channel+mask_ext,1)] = ma.masked
 
     #Calculate the noise estimate from the masked array 
     noise = noise_est(masked)
@@ -523,13 +523,15 @@ def mask_for_rms(spec,nsig=3.):
     #Mask 10 channels around each masked channel to capture faint line wings
     if ma.is_masked(masked):
         where_masked = np.where(masked.mask)[0]
-        mask_extension = 10
         for channel in where_masked:
-            masked[slice(channel-10,channel+10,1)] = ma.masked
+            masked[slice(channel-mask_ext,channel+mask_ext,1)] = ma.masked
     return(masked)
 
 def get_rms(spec):
-    if len(np.where(np.isnan(spec))[0]) == len(spec):
+    """
+    Calculate the rms noise of a spectrum with masked signal.
+    """
+    if np.isnan(spec).all():
         rms = np.nan
     else:
         m = mask_for_rms(spec)
