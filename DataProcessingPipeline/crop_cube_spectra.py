@@ -174,8 +174,8 @@ def freq_to_vel(frequency,h):
     """
     if 'RESTFREQ' in h:
         f0 = h['RESTFREQ']
-    elif 'RESTfreq' in h:
-        f0 = h['RESTfreq']
+    elif 'RESTFRQ' in h:
+        f0 = h['RESTFRQ']
     velocity = 3e5*(1-(frequency/f0))
     return(velocity)
 
@@ -185,8 +185,8 @@ def vel_to_freq(velocity,h):
     """
     if 'RESTFREQ' in h:
         f0 = h['RESTFREQ']
-    elif 'RESTfreq' in h:
-        f0 = h['RESTfreq']
+    elif 'RESTFRQ' in h:
+        f0 = h['RESTFRQ']
     frequency = (f0)*(1-(velocity/3e5))
     return(frequency)
 
