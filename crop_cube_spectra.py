@@ -40,7 +40,7 @@ def main():
     try:
         opts,args = getopt.getopt(sys.argv[1:],"i:o:s:e:vfh")
     except getopt.GetoptError:
-        print("Invalid key")
+        print("Invalid arguments")
         print(__doc__)
         sys.exit(2)
     for o,a in opts:
