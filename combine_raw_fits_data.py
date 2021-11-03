@@ -8,6 +8,10 @@ prior to combination, weighting overlapping regions using the rms
 noise maps, and fitting the 
 Uses MIRIAD version 4.3.8 to regrid and combine the data cubes. 
 
+This code also utilizes the squeeze_cube.py, auto_crop_cube.py,
+crop_cube_spectra.py, prefit_raw_data_baselines.py, 
+and make_rms_map.py scripts for data processing prior to combination.
+
 Example:
 python combine_raw_fits_data.py -i map1.fits,map2.fits,map3.fits
                             -o big_map.fits -r template.fits -cpd
