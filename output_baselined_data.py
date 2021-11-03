@@ -343,7 +343,7 @@ def fit_wrapper(orig_spec,window_halfwidth,max_order,filter_width):
     
     Parameters
     ----------
-    orig_spec : numpy array of floats
+    orig_spec : ndarray
         The original spectrum with full resolution.
     window_halfwidth : int
         Half of the window width used to mask the spectrum for fitting.
@@ -365,7 +365,6 @@ def fit_wrapper(orig_spec,window_halfwidth,max_order,filter_width):
     sm = im.median_filter(m,filter_width)[::filter_width]
     masked= mask_for_baseline(sm,window_halfwidth=window_halfwidth)
     #Get best-fit polynomial
-    mm = masked.mask
     xx = np.arange(masked.size)
     basepoly = output_basepoly(masked,max_order=max_order)
     bpc = len(basepoly.c)-1
