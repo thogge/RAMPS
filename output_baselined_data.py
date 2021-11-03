@@ -53,7 +53,6 @@ import pdb
 def main():
 
     #Defaults
-    output_base = "default.fits"
     numcores = 1
     max_order = 2
     filter_width = 1

@@ -50,6 +50,7 @@ def check_files_exist(base_dir,field,trans,file_suffixes):
     all_files_exist = file_exists.all()
     return(all_files_exist)
 
+#Defaults
 numcores = 1
 overwrite = False
 try:

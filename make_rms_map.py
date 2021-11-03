@@ -27,6 +27,7 @@ import sys,os,getopt
 import multiprocessing as mp
 
 def main():
+    #Defaults
     numcores = 1                
     try:
         opts,args = getopt.getopt(sys.argv[1:],"i:o:n:h")
