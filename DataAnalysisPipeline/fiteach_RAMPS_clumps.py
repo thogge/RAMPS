@@ -69,7 +69,7 @@ def main():
     noise_11_file = filebase+'_NH3_1-1_rms.fits'
     noise_22_file = filebase+'_NH3_2-2_rms.fits'
     vel_11_file = filebase+'_NH3_1-1_hf_vel.fits'
-    width_11_file = filebase+'_NH3_1-1_hf_width.fits'
+    sigma_11_file = filebase+'_NH3_1-1_hf_sigma.fits'
     
     label3D_11 = pyfits.getdata(label3D_11_file)
     planemask22 = np.max(pyfits.getdata(label3D_22_file),axis=0)
@@ -77,7 +77,7 @@ def main():
     errmap11 = pyfits.getdata(noise_11_file)
     errmap22 = pyfits.getdata(noise_22_file)
     vel_11 = pyfits.getdata(vel_11_file)
-    width_11 = pyfits.getdata(width_11_file)
+    sigma_11 = pyfits.getdata(sigma_11_file)
     errcube11 = np.repeat(errmap11[np.newaxis,:,:],d11.shape[0], axis=0)
     errcube22 = np.repeat(errmap22[np.newaxis,:,:],d22.shape[0], axis=0)
     errcube = np.concatenate((errcube11,errcube22))
@@ -88,7 +88,7 @@ def main():
     
     #wc = np.where(planemask_22 == clumpnum)
     
-    planemask = np.logical_and(planemask22 > 0.,width_11[0,:,:] > 0.)
+    planemask = np.logical_and(planemask22 > 0.,sigma_11[0,:,:] > 0.)
     vmin = max(c2v(0,h11),c2v(0,h22))
     vmax = min(c2v(h11['NAXIS3']-1,h11),c2v(h22['NAXIS3']-1,h22))
     ww = np.where(np.logical_or(vel_11<vmin,vel_11>vmax))
@@ -114,23 +114,23 @@ def main():
     cubes1 = pyspeckit.CubeStack([cube11,cube22],maskmap=planemask)
     cubes1.unit="K"
 
-    cube1 = fit_single_comp(cubes1,vel_11,width_11,vmin,vmax,xmax,ymax,
+    cube1 = fit_single_comp(cubes1,vel_11,sigma_11,vmin,vmax,xmax,ymax,
                             peaksnr,errcube,numcores)
     modelcube1 = cube1.get_modelcube()
     
 
-    planemask = np.logical_and(planemask22 > 0.,width_11[1,:,:] > 0.)
+    planemask = np.logical_and(planemask22 > 0.,sigma_11[1,:,:] > 0.)
     cubes2 = pyspeckit.CubeStack([cube11,cube22],maskmap=planemask)
     cubes2.unit="K"
     """
-    cube2 = fit_two_comp(cubes2,vel_11,width_11,vmin,vmax,xmax,ymax,
+    cube2 = fit_two_comp(cubes2,vel_11,sigma_11,vmin,vmax,xmax,ymax,
                          peaksnr,errcube,numcores)
     modelcube2 = cube2.get_modelcube()
     #merge_cubes(cube1,cube2,modelcube1,modelcube2,h11,h22,errmap11,errmap22,outputbase,vmin_clump,vmax_clump)
     """
     #"""
     #try:
-    cube2 = fit_two_comp(cubes2,vel_11,width_11,vmin,vmax,xmax,ymax,
+    cube2 = fit_two_comp(cubes2,vel_11,sigma_11,vmin,vmax,xmax,ymax,
                          peaksnr,errcube,numcores)
     modelcube2 = cube2.get_modelcube()
     merge_cubes(cube1,cube2,modelcube1,modelcube2,h11,h22,errcube,outputbase,label3D_11)
@@ -212,7 +212,7 @@ def edit_header(h):
     return(h)
 
 
-def fit_single_comp(cubes,vel_11,width_11,vmin,vmax,xmax,ymax,
+def fit_single_comp(cubes,vel_11,sigma_11,vmin,vmax,xmax,ymax,
                     peaksnr,errcube,numcores):
     """
     Fit cubes using a single-component ammonia it.
@@ -225,7 +225,7 @@ def fit_single_comp(cubes,vel_11,width_11,vmin,vmax,xmax,ymax,
     guesses[0,:,:] = 18                # Kinetic temperature 
     guesses[1,:,:] = 18                # Excitation  Temp
     guesses[2,:,:] = 15                # log(column)
-    guesses[3,:,:] = width_11[0,:,:]   # Line width               
+    guesses[3,:,:] = sigma_11[0,:,:]   # Line velocity dispersion               
     guesses[4,:,:] = vel_11[0,:,:]     # Line centroid              
     guesses[5,:,:] = 0.5               # F(ortho) - ortho NH3 fraction (fixed)
     guesses[6,:,:] = 0.1               # Beam filling fraction
@@ -247,7 +247,7 @@ def fit_single_comp(cubes,vel_11,width_11,vmin,vmax,xmax,ymax,
     
     return(cubes)
 
-def fit_two_comp(cubes,vel_11,width_11,vmin,vmax,xmax,ymax,
+def fit_two_comp(cubes,vel_11,sigma_11,vmin,vmax,xmax,ymax,
                  peaksnr,errcube,numcores):
     """
     Fit cubes using a two-component ammonia it.
@@ -260,14 +260,14 @@ def fit_two_comp(cubes,vel_11,width_11,vmin,vmax,xmax,ymax,
     guesses[0,:,:] = 18                # Kinetic temperature 
     guesses[1,:,:] = 18                # Excitation  Temp
     guesses[2,:,:] = 15                # log(column)
-    guesses[3,:,:] = width_11[0,:,:]   # Line width               
+    guesses[3,:,:] = sigma_11[0,:,:]   # Line velocity dispersion               
     guesses[4,:,:] = vel_11[0,:,:]     # Line centroid              
     guesses[5,:,:] = 0.5               # F(ortho) - ortho NH3 fraction (fixed)
     guesses[6,:,:] = 0.1               # Beam filling fraction
     guesses[7,:,:] = 18                # Kinetic temperature 
     guesses[8,:,:] = 18                # Excitation  Temp
     guesses[9,:,:] = 15                # log(column)
-    guesses[10,:,:] = width_11[1,:,:]  # Line width                
+    guesses[10,:,:] = sigma_11[1,:,:]  # Line velocity dispersion                
     guesses[11,:,:] = vel_11[1,:,:]    # Line centroid              
     guesses[12,:,:] = 0.5              # F(ortho) - ortho NH3 fraction (fixed)
     guesses[13,:,:] = 0.1              # Beam filling fraction
