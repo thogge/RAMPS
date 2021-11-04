@@ -1,23 +1,16 @@
 """
 run_data_analysis_pipeline.py
 
-Pipeline to find clumps and determine their gas properties from
-the processed data cubes.
+Pipeline to find clumps and analyze their NH3(1,1) and (2,2)
+emission to determine their gas properties. Must be run after
+processing the data using run_data_processing_pipeline.py.
 
-This pipeline utilizes the 
+This pipeline utilizes the ammonia_clumpfind.py,
+fit_NH3_11_hf_clumps.py, and fiteach_RAMPS_clumps.py scripts.
 
-Pipeline to combine and baseline subtract data cubes for all lines 
-observed by the RAMPS project. Tiles (individual observations) are
-combined to form fields (1 degree wide regions). Fields are 
-baseline subtracted and moment maps and rms noise maps are created 
-to be used for future analysis.
-
-This pipeline utilizes the combine_raw_fits_data.py, 
-fix_header_restfreq.py, crop_cube_spectra.py, 
-output_baselined_data.py, and make_rms_map.py scripts.
 
 Example:
-python run_data_processing_pipeline.py -n 28 -o
+python run_data_analysis_pipeline.py -n 28 -o
 
 -n : Numcores   -- Number of cores used for parallel processing
 -o : Overwrite  -- Flag to overwrite previously fit data
@@ -69,13 +62,13 @@ def main():
             if (not os.path.isfile(label_3D_file)) or overwrite:
                 if t=="1-1":
                     executestring = "python "+scripts_dir+\
-                                    "satellite_clumpfind.py -i "+files+\
+                                    "ammonia_clumpfind.py -i "+files+\
                                     " -r "+filebase+"_rms.fits"+\
                                     " -o "+filebase+" -n "+str(numcores)+\
                                     " -t "+t[::2]+" -s 100" 
-                elif t=="2-2" and "L47" not in filebase :
+                elif t=="2-2" and "L47" not in filebase:
                     executestring = "python "+scripts_dir+\
-                                    "satellite_clumpfind.py -i "+files+\
+                                    "ammonia_clumpfind.py -i "+files+\
                                     " -r "+filebase+"_rms.fits"+\
                                     " -o "+filebase+" -n "+str(numcores)+\
                                     " -t "+t[::2]+" -s 50" 
@@ -83,25 +76,29 @@ def main():
                 os.system(executestring)
 
         
-        label3D_11_file = fieldbase+"_NH3_1-1_clump_labels_3D.fits"
+        label_3D_11_file = fieldbase+"_NH3_1-1_clump_labels_3D.fits"
         vel11_file = fieldbase+"_NH3_1-1_hf_vel.fits"
         sigma11_file = fieldbase+"_NH3_1-1_hf_sigma.fits"
         file11 = fieldbase+"_NH3_1-1_cube.fits"
         fit11_files = [vel11_file,sigma11_file]
-        if (os.path.isfile(label3D_11_file) and 
+        if (os.path.isfile(label_3D_11_file) and 
             (not check_files_exist(fit11_files) or overwrite)):
             executestring = "python "+scripts_dir+\
                             "fit_NH3_11_hf_clumps.py -i "+file11+\
-                            " -o "+fieldbase+"_NH3_1-1 -l "+label3D_11_file+\
+                            " -o "+fieldbase+"_NH3_1-1 -l "+label_3D_11_file+\
                             " -r "+fieldbase+"_NH3_1-1_rms.fits"+\
                             " -n "+str(numcores)
             print(executestring)
             os.system(executestring)
 
         tkin_file = fieldbase+"_tkin.fits"
-        label2D_22_file = fieldbase+"_NH3_2-2_clump_labels_2D.fits"
-        if overwrite or (not os.path.isfile(tkin_file)) and os.path.isfile(label2D_22_file):
-            executestring = "python "+scripts_dir+"pyspeckit_scripts/test_pyspeckit/fiteach_RAMPS_clumps.py -f "+fieldbase+" -n "+str(numcores)
+        label_3D_22_file = fieldbase+"_NH3_2-2_clump_labels_3D.fits"
+        label_files = [label_3D_11_file,label_3D_22_file]
+        if (check_files_exist(fit11_files+label_files) and 
+            (not os.path.isfile(tkin_file) or overwrite)):
+            executestring = "python "+scripts_dir+\
+                            "pyspeckit_scripts/fiteach_RAMPS_clumps.py -f "+\
+                            fieldbase+" -n "+str(numcores)
             print(executestring)
             os.system(executestring)
 
