@@ -283,7 +283,7 @@ def check_files_exist(file_dir,field,trans,file_suffixes):
     file_exists = []
     for suff in file_suffixes:
         file_exists.append(os.path.exists(file_dir+"L"+field+"_"+
-                                          trans+"_"+suff+".fits")
+                                          trans+"_"+suff+".fits"))
     all_files_exist = file_exists.all()
     return(all_files_exist)
 
