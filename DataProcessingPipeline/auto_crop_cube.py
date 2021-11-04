@@ -9,6 +9,9 @@ the x direction. Can also crop along the
 spectral axis by giving the new first and last
 channels/frequencies/velocities.
 
+This module utilizes crop_cube.py, which requires the
+spectral_cube and pyspeckit packages.
+
 Example:
 python auto_crop_cube.py -i L30_Tile01.fits
                          -o L30_Tile01_cropped.fits
@@ -35,6 +38,8 @@ import numpy as np
 from spectral_cube import SpectralCube
 import pyspeckit
 
+root_dir = "/projectnb2/jjgroup/thogge/ramps/"
+scripts_dir = root_dir+"scripts/python/"
 
 def main():
     spec_crop = False
@@ -182,27 +187,30 @@ def main():
     new_ycen = new_ymin + y_halfwidth
 
     """
-    Use Pyspeckit SpectralCube class to crop the cube spatially 
-    and write it to the output file.
+    Use crop_cube.py to crop the cube spatially and 
+    write it to the output file.
     """
     if spec_crop:
-        cube = SpectralCube.read(temp_file)
-        os.system("rm "+temp_file)
+        execute_string = "python "+scripts_dir+"crop_cube.py -i "+temp_file+\
+                         " -o "+output_file+\
+                         " -x "+str(xcen)+\
+                         " -y "+str(xcen)+\
+                         " -c "+str(x_halfwidth)+\
+                         " -d "+str(y_halfwidth)
     else:
-        cube = SpectralCube.read(input_file)
-    new_cube = pyspeckit.cubes.subcube(cube,xcen,x_halfwidth,
-                                       new_ycen,y_halfwidth)
-    new_cube.write(output_file,format="fits",overwrite=True)
+        execute_string = "python "+scripts_dir+"crop_cube.py -i "+input_file+\
+                         " -o "+output_file+\
+                         " -x "+str(xcen)+\
+                         " -y "+str(xcen)+\
+                         " -c "+str(x_halfwidth)+\
+                         " -d "+str(y_halfwidth)
+    print(execute_string)
+    os.system(execute_string)
 
-    """
-    Fix the header info that Pyspeckit changed.
-    Also, check that all of the nans were removed.
-    """
-    d,h = fits.getdata(output_file,header=True)
+    #Check that all of the nans were removed.
+    d = fits.getdata(output_file)
     if np.isnan(np.sum(d)):
         print("Not all nans removed from " + input_file)
-    h['CTYPE3'] = spec_type
-    fits.writeto(output_file,d,h,overwrite=True)
 
 
 
