@@ -1,53 +1,134 @@
+"""
+run_data_analysis_pipeline.py
+
+Pipeline to find clumps and determine their gas properties from
+the processed data cubes.
+
+This pipeline utilizes the 
+
+Pipeline to combine and baseline subtract data cubes for all lines 
+observed by the RAMPS project. Tiles (individual observations) are
+combined to form fields (1 degree wide regions). Fields are 
+baseline subtracted and moment maps and rms noise maps are created 
+to be used for future analysis.
+
+This pipeline utilizes the combine_raw_fits_data.py, 
+fix_header_restfreq.py, crop_cube_spectra.py, 
+output_baselined_data.py, and make_rms_map.py scripts.
+
+Example:
+python run_data_processing_pipeline.py -n 28 -o
+
+-n : Numcores   -- Number of cores used for parallel processing
+-o : Overwrite  -- Flag to overwrite previously fit data
+-h : Help       -- Display this help
+
+"""
+
 import sys,os,getopt
 import numpy as np
 import astropy.io.fits as fits
 import pdb
 
-overwrite = False
-numcores = 28
-try:
-    opts,args = getopt.getopt(sys.argv[1:],"n:oh")
-except getopt.GetoptError,err:
-    print(str(err))
-    print(__doc__)
-    sys.exit(2)
-for o,a in opts:
-    if o == "-o":
-        overwrite = True
-    elif o == "-n":
-        numcores = int(a)
-    elif o == "-h":
-        print(__doc__)
-        sys.exit(1)
-    else:
-        assert False, "unhandled option"
+def main():
+
+    #Defaults
+    numcores = 1
+    overwrite = False
+    try:
+        opts,args = getopt.getopt(sys.argv[1:],"n:oh")
+    except getopt.GetoptError:
+        print("Invalid arguments")
         print(__doc__)
         sys.exit(2)
+    for o,a in opts:
+        if o == "-n":
+            numcores = int(a)
+        elif o == "-o":
+            overwrite = True
+        elif o == "-h":
+            print(__doc__)
+            sys.exit(1)
+        else:
+            assert False, "unhandled option"
+            print(__doc__)
+            sys.exit(2)
 
-files_dir = os.getcwd()
-scripts_dir = "/projectnb/jjgroup/thogge/ramps/scripts/python/"
+    files_dir = os.getcwd()
+    scripts_dir = "/projectnb/jjgroup/thogge/ramps/scripts/python/"
+    
+    fields = np.concatenate((np.arange(63)/2.+10,np.array([43,45,47])))
+    trans = ["1-1","2-2"]
+        
+    for field in fields:
+        fieldbase = "L"+str(field).replace(".","_").replace("_0","")
 
-fields = np.concatenate((np.arange(63)/2.+10,np.array([43,45,47])))
+        for t in trans:
+            filebase = fieldbase+"NH3_"+t
+            label_3D_file = filebase+"_clump_labels_3D.fits"
+            if (not os.path.isfile(label_3D_file)) or overwrite:
+                if t=="1-1":
+                    executestring = "python "+scripts_dir+\
+                                    "satellite_clumpfind.py -i "+files+\
+                                    " -r "+filebase+"_rms.fits"+\
+                                    " -o "+filebase+" -n "+str(numcores)+\
+                                    " -t "+t[::2]+" -s 100" 
+                elif t=="2-2" and "L47" not in filebase :
+                    executestring = "python "+scripts_dir+\
+                                    "satellite_clumpfind.py -i "+files+\
+                                    " -r "+filebase+"_rms.fits"+\
+                                    " -o "+filebase+" -n "+str(numcores)+\
+                                    " -t "+t[::2]+" -s 50" 
+                print(executestring)
+                os.system(executestring)
 
-for field in fields:
-    filebase = "L"+str(field).replace(".","_").replace("_0","")
-    label3D_11_file = filebase+"_NH3_1-1_clump_labels_3D.fits"
-    tex_file = filebase + "_NH3_1-1_hf_tex.fits"
-    if os.path.isfile(filebase+"_NH3_1-1_fixed_c.fits"):
-        file11 = filebase+"_NH3_1-1_fixed_c.fits"
-    else:
-        file11 = filebase+"_NH3_1-1_fixed.fits"
-    if overwrite or (not os.path.isfile(tex_file)) and os.path.isfile(label3D_11_file):
-        executestring = "python " + scripts_dir + "fit_NH3_11_hf_clumps.py -i " + file11 + " -o " + filebase + "_NH3_1-1 -l " + label3D_11_file + " -r " + filebase + "_NH3_1-1_rms.fits" + " -n " + str(numcores)
-        print(executestring)
-        os.system(executestring)
+        
+        label3D_11_file = fieldbase+"_NH3_1-1_clump_labels_3D.fits"
+        vel11_file = fieldbase+"_NH3_1-1_hf_vel.fits"
+        sigma11_file = fieldbase+"_NH3_1-1_hf_sigma.fits"
+        file11 = fieldbase+"_NH3_1-1_cube.fits"
+        fit11_files = [vel11_file,sigma11_file]
+        if (os.path.isfile(label3D_11_file) and 
+            (not check_files_exist(fit11_files) or overwrite)):
+            executestring = "python "+scripts_dir+\
+                            "fit_NH3_11_hf_clumps.py -i "+file11+\
+                            " -o "+fieldbase+"_NH3_1-1 -l "+label3D_11_file+\
+                            " -r "+fieldbase+"_NH3_1-1_rms.fits"+\
+                            " -n "+str(numcores)
+            print(executestring)
+            os.system(executestring)
 
-    tkin_file = filebase + "_tkin.fits"
-    label2D_22_file = filebase+"_NH3_2-2_clump_labels_2D.fits"
-    if overwrite or (not os.path.isfile(tkin_file)) and os.path.isfile(label2D_22_file):
-        executestring = "python " + scripts_dir + "pyspeckit_scripts/test_pyspeckit/fiteach_RAMPS_clumps.py -f " + filebase + " -n " + str(numcores)
-        print(executestring)
-        os.system(executestring)
-    #"""
+        tkin_file = fieldbase+"_tkin.fits"
+        label2D_22_file = fieldbase+"_NH3_2-2_clump_labels_2D.fits"
+        if overwrite or (not os.path.isfile(tkin_file)) and os.path.isfile(label2D_22_file):
+            executestring = "python "+scripts_dir+"pyspeckit_scripts/test_pyspeckit/fiteach_RAMPS_clumps.py -f "+fieldbase+" -n "+str(numcores)
+            print(executestring)
+            os.system(executestring)
+
+def check_files_exist(file_list):
+    """
+    Check that necessary files exist before moving on to the 
+    next step of the pipeline
+
+    Parameters
+    ----------
+    file_list : list
+        A list of the files to search for.
+
+    Returns
+    -------
+    all_files_exist : bool
+        If all of the files that were searched for exist, then True,
+        if not, then False.
+    """
+    file_exists = []
+    for files in file_list:
+        file_exists.append(os.path.exists(files))
+    all_files_exist = file_exists.all()
+    return(all_files_exist)
+
+if __name__ == '__main__':
+    main()
+
 
 
