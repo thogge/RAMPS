@@ -3,7 +3,7 @@
 """
 crop_cube.py
 
-Perform spatial cropping on 3D data cube.
+Perform spatial cropping on 3D data cube using pyspeckit.
 Supports use of world coordinates.
 
 Example:
@@ -23,7 +23,6 @@ python crop_cube.py -i L30_Tile01.fits
 -c : xhw        -- Halfwidth of x axis
 -d : yhw       	-- Halfwidth of	y axis
 -h : Help       -- Display this help
-
 """
 
 import sys,os,getopt
