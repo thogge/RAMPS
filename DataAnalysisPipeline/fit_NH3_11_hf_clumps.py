@@ -1,21 +1,28 @@
-#!/usr/bin/env python
-# encoding: utf-8
 """
-fit_NH3_11.py
+fit_NH3_11_hf_clump.py
 
-Fit NH3(1,1) data cube and output the fit and fit parameters. 
+Fit NH3(1,1) data cube using an ammonia model that includes
+the magnetic hyperfine transitions. This module outputs the 
+best-fit model, the fit parameters, and the errors on the 
+fit parameters. Fit parameters include the excitation 
+temperature (tex), the clump velocity (vel), the velocity
+dispersion (sigma), and the total integrated optical
+depth (tau11_tot). Additionally, outputs the line 
+center optical depth (tau11_0).
 
 This version runs in parallel, which is useful because
 the process is fairly slow.
 
 Example:
-python fit_NH3_11.py 
+python fit_NH3_11_hf_clumps.py 
        -i L30_Tile01-04_NH3_1-1_fixed.fits 
        -o L30_Tile01-04_NH3_1-1.fits 
 
--i : Input      -- Input file (reduced by pipeline)
--o : Output     -- Output file 
--n : Cores   -- Number of cores available for parallized computing
+-i : Input      -- Input NH3(1,1) data cube 
+-l : Label      -- Label 3D file for NH3(1,1)
+-r : rms noise  -- rms noise map for NH3(1,1)
+-o : Outputbase -- Filebase for the output data
+-n : Numcores   -- Number of cores available for parallized computing
 -h : Help       -- Display this help
 
 """
@@ -34,7 +41,7 @@ import numpy.ma as ma
 import math
 import scipy.signal as si
 import matplotlib.pyplot as plt
-import multiprocessing, logging
+import multiprocessing as mp
 import my_pad
 import uncertainties as uu
 from uncertainties import unumpy as unp
@@ -52,8 +59,8 @@ def main():
     numcores = 1
     try:
         opts,args = getopt.getopt(sys.argv[1:],"i:l:r:n:o:h")
-    except getopt.GetoptError.err:
-        print(str(err))
+    except getopt.GetoptError as err:
+        print(err.msg)
         print(__doc__)
         sys.exit(2)
     for o,a in opts:
@@ -76,21 +83,21 @@ def main():
             sys.exit(2)
         
 
-    #Read in data into array
+    #Read in data into arrays[\]
     d,h = pyfits.getdata(input_file,header=True)
     nans = np.where(np.isnan(d))
     d[nans] = 0.
-    l = pyfits.getdata(label_file)
-    r = pyfits.getdata(rms_file)
-    m = np.zeros(l.shape)
-    wm = np.where(l>0)
-    m[wm] = 1.
-    main_peak = np.max(d*m,axis=0)
-    wc = np.where(main_peak>0)
-    XG,YG = np.meshgrid(np.arange(r.shape[1]),np.arange(r.shape[0]))
-    xs,ys = XG[wc],YG[wc]
+    labels_3D = pyfits.getdata(label_file)
+    rms_map = pyfits.getdata(rms_file)
+    mask_3D = np.zeros(labels_3D.shape)
+    unmasked_voxs = np.where(labels_3D>0)
+    mask_3D[unmasked_voxs] = 1.
+    main_peak = np.max(d*mask_3D,axis=0)
+    clump_pxs = np.where(main_peak>0)
+    XG,YG = np.meshgrid(np.arange(rms_map.shape[1]),np.arange(rms_map.shape[0]))
+    xs,ys = XG[clump_pxs],YG[clump_pxs]
     #pdb.set_trace()
-    vrs = get_mask_vranges(l,h)
+    vrs = get_mask_vranges(labels_3D,h)
     if numcores > 1:
         #Split the data
         xx = np.array_split(xs, numcores, 0)
@@ -98,10 +105,10 @@ def main():
         ps = []
         #Fit baselines and write to temporary files
         for num in range(len(xx)):
-            ps.append(multiprocessing.Process(target=do_chunk_fit,
+            ps.append(mp.Process(target=do_chunk_fit,
                                               args=(num,d[:,yy[num],xx[num]],
-                                                    l[:,yy[num],xx[num]],
-                                                    r[yy[num],xx[num]],
+                                                    labels_3D[:,yy[num],xx[num]],
+                                                    rms_map[yy[num],xx[num]],
                                                     vrs,h,output_filebase)))
         for p in ps:
             p.start()
@@ -116,12 +123,12 @@ def main():
         sigma_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_sigma_err",d[:2,:,:].shape)
         tex = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tex",d[:2,:,:].shape)
         tex_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tex_err",d[:2,:,:].shape)
-        tau11tot = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11tot",d[:2,:,:].shape)
-        tau11tot_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11tot_err",d[:2,:,:].shape)
-        tau110 = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau110",d[:2,:,:].shape)
-        tau110_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau110_err",d[:2,:,:].shape)
+        tau11_tot = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11_tot",d[:2,:,:].shape)
+        tau11_tot_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11_tot_err",d[:2,:,:].shape)
+        tau11_0 = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11_0",d[:2,:,:].shape)
+        tau11_0_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11_0_err",d[:2,:,:].shape)
     else:
-        do_chunk_fit(0,d[:,ys,xs],l[:,ys,xs],r[ys,xs],vrs,h,output_filebase)
+        do_chunk_fit(0,d[:,ys,xs],labels_3D[:,ys,xs],rms_map[ys,xs],vrs,h,output_filebase)
         fitcube = recombine_txt(numcores,xs,ys,output_filebase+"_temp_fit",d.shape)
         fit_reg = recombine_txt(numcores,xs,ys,output_filebase+"_temp_fit_reg",d[:2,:,:].shape)
         vel = recombine_txt(numcores,xs,ys,output_filebase+"_temp_vel",d[:2,:,:].shape)
@@ -130,10 +137,10 @@ def main():
         sigma_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_sigma_err",d[:2,:,:].shape)
         tex = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tex",d[:2,:,:].shape)
         tex_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tex_err",d[:2,:,:].shape)
-        tau11tot = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11tot",d[:2,:,:].shape)
-        tau11tot_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11tot_err",d[:2,:,:].shape)
-        tau110 = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau110",d[:2,:,:].shape)
-        tau110_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau110_err",d[:2,:,:].shape)
+        tau11_tot = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11_tot",d[:2,:,:].shape)
+        tau11_tot_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11_tot_err",d[:2,:,:].shape)
+        tau11_0 = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11_0",d[:2,:,:].shape)
+        tau11_0_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11_0_err",d[:2,:,:].shape)
 
     os.system("rm "+output_filebase+"_temp*.txt")
     
@@ -145,10 +152,10 @@ def main():
     sigma_err_file = output_filebase+"_hf_sigma_err.fits"
     tex_file = output_filebase+"_hf_tex.fits"
     tex_err_file = output_filebase+"_hf_tex_err.fits"
-    tau11tot_file = output_filebase+"_hf_tautot.fits"
-    tau11tot_err_file = output_filebase+"_hf_tautot_err.fits"
-    tau110_file = output_filebase+"_hf_tau0.fits"
-    tau110_err_file = output_filebase+"_hf_tau0_err.fits"
+    tau11_tot_file = output_filebase+"_hf_tautot.fits"
+    tau11_tot_err_file = output_filebase+"_hf_tautot_err.fits"
+    tau11_0_file = output_filebase+"_hf_tau0.fits"
+    tau11_0_err_file = output_filebase+"_hf_tau0_err.fits"
 
     hfit = h[:]
     hfit['DATAMIN'] = -3.
@@ -176,17 +183,17 @@ def main():
     hsigma['DATAMAX'] = np.nanmax(sigma)
     pyfits.writeto(sigma_file,sigma,hsigma,overwrite=True)
     pyfits.writeto(sigma_err_file,sigma_err,hsigma,overwrite=True)
-    htau11tot = hvel[:]
-    htau11tot['DATAMIN'] = 0.
-    htau11tot['DATAMAX'] = np.nanmax(tau11tot)
-    pyfits.writeto(tau11tot_file,tau11tot,htau11tot,overwrite=True)
-    pyfits.writeto(tau11tot_err_file,tau11tot_err,htau11tot,overwrite=True)
-    htau110 = htau11tot[:]
-    htau110['DATAMIN'] = 0.
-    htau110['DATAMAX'] = np.nanmax(tau110)
-    htau110['BUNIT'] = 'n/a'
-    pyfits.writeto(tau110_file,tau110,htau110,overwrite=True)
-    pyfits.writeto(tau110_err_file,tau110_err,htau110,overwrite=True)
+    htau11_tot = hvel[:]
+    htau11_tot['DATAMIN'] = 0.
+    htau11_tot['DATAMAX'] = np.nanmax(tau11_tot)
+    pyfits.writeto(tau11_tot_file,tau11_tot,htau11_tot,overwrite=True)
+    pyfits.writeto(tau11_tot_err_file,tau11_tot_err,htau11_tot,overwrite=True)
+    htau11_0 = htau11_tot[:]
+    htau11_0['DATAMIN'] = 0.
+    htau11_0['DATAMAX'] = np.nanmax(tau11_0)
+    htau11_0['BUNIT'] = 'n/a'
+    pyfits.writeto(tau11_0_file,tau11_0,htau11_0,overwrite=True)
+    pyfits.writeto(tau11_0_err_file,tau11_0_err,htau11_0,overwrite=True)
    
 def recombine_3D(numparts,filebase):
     """
@@ -226,13 +233,13 @@ def do_chunk_fit(num,data,label,rms,vranges,header,output_filebase):
     vel=np.full(data[:2,:].shape,np.nan)
     sigma=np.full(data[:2,:].shape,np.nan)
     tex=np.full(data[:2,:].shape,np.nan)
-    tau11tot=np.full(data[:2,:].shape,np.nan)
-    tau110=np.full(data[:2,:].shape,np.nan)
+    tau11_tot=np.full(data[:2,:].shape,np.nan)
+    tau11_0=np.full(data[:2,:].shape,np.nan)
     vel_err=np.full(data[:2,:].shape,np.nan)
     sigma_err=np.full(data[:2,:].shape,np.nan)
     tex_err=np.full(data[:2,:].shape,np.nan)
-    tau11tot_err=np.full(data[:2,:].shape,np.nan)
-    tau110_err=np.full(data[:2,:].shape,np.nan)
+    tau11_tot_err=np.full(data[:2,:].shape,np.nan)
+    tau11_0_err=np.full(data[:2,:].shape,np.nan)
 
     vmin = -10
     vmax = 160
@@ -252,9 +259,9 @@ def do_chunk_fit(num,data,label,rms,vranges,header,output_filebase):
             l.append(c)
         cc = np.where(s==max(s))[0][0]
         ll = l[cc]
-        wc = np.where(label[:,i]==ll)[0]
-        vv = np.sum(vax[wc]*data[wc,i])/np.sum(data[wc,i])
-        ww = max(len(wc)*(header['CDELT3']/1e3)/(2*(2*np.log(2))**(0.5)),0.2)
+        clump_chans = np.where(label[:,i]==ll)[0]
+        vv = np.sum(vax[clump_chans]*data[clump_chans,i])/np.sum(data[clump_chans,i])
+        ww = max(len(clump_chans)*(header['CDELT3']/1e3)/(2*(2*np.log(2))**(0.5)),0.2)
         init_pars1 = [vv,ww,5,5]
         fit1,pars1,perrs1 = fit_NH3_11_hf(data[:,i],vax,rms[i],init_pars1,par_bounds1)
         BIC_1 = get_BIC(data[:,i],fit1,rms[i],pars1)
@@ -271,21 +278,21 @@ def do_chunk_fit(num,data,label,rms,vranges,header,output_filebase):
             perrs2 = np.full((8,),np.nan)
             BIC_2 = np.nan
         try:
-            tau110_1,tau110_err_1 = get_tau110_from_tau11tot(xarr11.value,uu.ufloat(pars1[0],perrs1[0]),uu.ufloat(pars1[1],perrs1[1]),uu.ufloat(pars1[3],perrs1[3]))
+            tau11_0_1,tau11_0_err_1 = get_tau11_0_from_tau11_tot(xarr11.value,uu.ufloat(pars1[0],perrs1[0]),uu.ufloat(pars1[1],perrs1[1]),uu.ufloat(pars1[3],perrs1[3]))
         except:
-            tau110_1 = 0.
+            tau11_0_1 = 0.
         try:
-            tau110_2_1,tau110_err_2_1 = get_tau110_from_tau11tot(xarr11.value,uu.ufloat(pars2[0],perrs2[0]),uu.ufloat(pars2[1],perrs2[1]),uu.ufloat(pars2[3],perrs2[3]))
+            tau11_0_2_1,tau11_0_err_2_1 = get_tau11_0_from_tau11_tot(xarr11.value,uu.ufloat(pars2[0],perrs2[0]),uu.ufloat(pars2[1],perrs2[1]),uu.ufloat(pars2[3],perrs2[3]))
         except:
-            tau110_2_1 = 0.
+            tau11_0_2_1 = 0.
         try:
-            tau110_2_2,tau110_err_2_2 = get_tau110_from_tau11tot(xarr11.value,uu.ufloat(pars2[4],perrs2[4]),uu.ufloat(pars2[5],perrs2[5]),uu.ufloat(pars2[7],perrs2[7]))
+            tau11_0_2_2,tau11_0_err_2_2 = get_tau11_0_from_tau11_tot(xarr11.value,uu.ufloat(pars2[4],perrs2[4]),uu.ufloat(pars2[5],perrs2[5]),uu.ufloat(pars2[7],perrs2[7]))
         except:
-            tau110_2_2 = 0.
+            tau11_0_2_2 = 0.
         
-        amp1 = (pars1[2]-texmin)*(1-math.exp(-tau110_1))
-        amp2_1 = (pars2[2]-texmin)*(1-math.exp(-tau110_2_1))
-        amp2_2 = (pars2[6]-texmin)*(1-math.exp(-tau110_2_2))
+        amp1 = (pars1[2]-texmin)*(1-math.exp(-tau11_0_1))
+        amp2_1 = (pars2[2]-texmin)*(1-math.exp(-tau11_0_2_1))
+        amp2_2 = (pars2[6]-texmin)*(1-math.exp(-tau11_0_2_2))
 
         #"""
         lcomps = np.unique(label[:,i])[1:]
@@ -358,10 +365,10 @@ def do_chunk_fit(num,data,label,rms,vranges,header,output_filebase):
             sigma_err[j,i] = perrs[4*j+1]
             tex[j,i] = pars[4*j+2]
             tex_err[j,i] = perrs[4*j+2]
-            tau11tot[j,i] = pars[4*j+3]
-            tau11tot_err[j,i] = perrs[4*j+3]
+            tau11_tot[j,i] = pars[4*j+3]
+            tau11_tot_err[j,i] = perrs[4*j+3]
             if np.isfinite(pars[4*j]):
-                tau110[j,i],tau110_err[j,i] = get_tau110_from_tau11tot(xarr11.value,uu.ufloat(pars[4*j],perrs[4*j]),uu.ufloat(pars[4*j+1],perrs[4*j+1]),uu.ufloat(pars[4*j+3],perrs[4*j+3]))
+                tau11_0[j,i],tau11_0_err[j,i] = get_tau11_0_from_tau11_tot(xarr11.value,uu.ufloat(pars[4*j],perrs[4*j]),uu.ufloat(pars[4*j+1],perrs[4*j+1]),uu.ufloat(pars[4*j+3],perrs[4*j+3]))
         #pdb.set_trace()
 
     np.savetxt(output_filebase+"_temp_fit_"+str(num)+".txt",fitcube)
@@ -372,10 +379,10 @@ def do_chunk_fit(num,data,label,rms,vranges,header,output_filebase):
     np.savetxt(output_filebase+"_temp_sigma_err_"+str(num)+".txt",sigma_err)
     np.savetxt(output_filebase+"_temp_tex_"+str(num)+".txt",tex)
     np.savetxt(output_filebase+"_temp_tex_err_"+str(num)+".txt",tex_err)
-    np.savetxt(output_filebase+"_temp_tau11tot_"+str(num)+".txt",tau11tot)
-    np.savetxt(output_filebase+"_temp_tau11tot_err_"+str(num)+".txt",tau11tot_err)
-    np.savetxt(output_filebase+"_temp_tau110_"+str(num)+".txt",tau110)
-    np.savetxt(output_filebase+"_temp_tau110_err_"+str(num)+".txt",tau110_err)
+    np.savetxt(output_filebase+"_temp_tau11_tot_"+str(num)+".txt",tau11_tot)
+    np.savetxt(output_filebase+"_temp_tau11_tot_err_"+str(num)+".txt",tau11_tot_err)
+    np.savetxt(output_filebase+"_temp_tau11_0_"+str(num)+".txt",tau11_0)
+    np.savetxt(output_filebase+"_temp_tau11_0_err_"+str(num)+".txt",tau11_0_err)
 
 
 def fit_NH3_11_hf(spec,vax,rms,init_pars,par_bounds):
@@ -500,7 +507,7 @@ def lnprob_line(theta, x, y, yerr, pbs):
     else:
         return lp + lnlike_line(theta, x, y, yerr)
 
-def get_tau110_from_tau11tot(xarr,vel,sigma,tau11_tot):
+def get_tau11_0_from_tau11_tot(xarr,vel,sigma,tau11_tot):
     linename = 'oneone'
 
     #pdb.set_trace()
@@ -515,8 +522,6 @@ def get_tau110_from_tau11tot(xarr,vel,sigma,tau11_tot):
     tauprofn = np.zeros(len(xarr))
     tauprofs = np.zeros(len(xarr))
     for kk,nuo in enumerate(nuoff):
-        #pdb.set_trace()
-        #for i,x in enumerate(xarr):
         tauprofn = tauprofn + (tau11_tot.nominal_value * tau_wts[kk] *
                              unp.exp(-(xarr+nuo.nominal_value-lines[kk])**2/
                                      (2.0*nusigma[kk].nominal_value**2)))
