@@ -31,8 +31,8 @@ def main():
     numcores = 1                
     try:
         opts,args = getopt.getopt(sys.argv[1:],"i:o:n:h")
-    except getopt.GetoptError:
-        print("Invalid arguments")
+    except getopt.GetoptError as err:
+        print(err.msg)
         print(__doc__)
         sys.exit(2)
     for o,a in opts:
@@ -68,7 +68,7 @@ def main():
         s = np.array_split(d, numcores, 2)
         procs = []
         for num in range(len(s)):
-            procs.append(multiprocessing.Process(target=do_chunk_rms,args=(num,s[num])))
+            procs.append(mp.Process(target=do_chunk_rms,args=(num,s[num])))
         for proc in procs:
             proc.start()
         
