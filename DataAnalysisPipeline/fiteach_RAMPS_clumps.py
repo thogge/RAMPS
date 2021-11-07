@@ -31,8 +31,8 @@ def main():
     numcores = 1
     try:
         opts,args = getopt.getopt(sys.argv[1:],"f:o:n:h")
-    except getopt.GetoptError,err:
-        print(str(err))
+    except getopt.GetoptError as err:
+        print(err.msg)
         print(__doc__)
         sys.exit(2)
     for o,a in opts:
