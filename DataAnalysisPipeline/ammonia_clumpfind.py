@@ -44,8 +44,8 @@ def main():
     min_size = 100
     try:
         opts,args = getopt.getopt(sys.argv[1:],"i:r:o:n:t:s:h")
-    except getopt.GetoptError,err:
-        print(str(err))
+    except getopt.GetoptError as err:
+        print(err.msg())
         print(__doc__)
         sys.exit(2)
     for o,a in opts:
@@ -169,7 +169,7 @@ def do_chunk(num,data,h,output_filebase,trans):
     searching for significant emission at the velocity offsets 
     associated with the satellite lines. 
     """
-    print num
+    print(num)
     masked_chunk = np.full(data.shape,0)
     
     """
@@ -192,13 +192,14 @@ def do_chunk(num,data,h,output_filebase,trans):
                     masked_chunk[:,i,j] = mask_ammonia_main_line(data[:,i,j],
                                                                  h,
                                                                  snr=s,
-                                                                 N=n,
+                                                                 nlines=n,
                                                                  trans=trans)
                     #Break out of loop if main line emission is found
                     if masked_chunk[:,i,j].max() > 0:
                         break
 
-    fits.writeto(output_filebase+"_temp"+str(num)+".fits",ya,overwrite=True)
+    fits.writeto(output_filebase+"_temp"+str(num)+".fits",
+                 masked_chunk,overwrite=True)
 
 
 def recombine(numparts,output_filebase):
@@ -249,11 +250,11 @@ def mask_ammonia_main_line(spec,h,window_width=5,snr=3,nlines=5,trans='11'):
     vax = get_vax(h)
 
     #Create rolling sum and calculate the SNR of the summed channels
-    ya = rolling_window(spec,window_width)
-    ya_ma = mask_snr_spec(ya,snr=1)
+    roll_arr = rolling_window(spec,window_width)
+    roll_arr_masked = mask_snr_spec(roll_arr,snr=1)
     va = rolling_window(vax,window_width)
-    sums = ma.sum(ya_ma,-1)
-    sum_errs = np.sqrt(ma.count(ya_ma,-1))
+    sums = ma.sum(roll_arr_masked,-1)
+    sum_errs = np.sqrt(ma.count(roll_arr_masked,-1))
     sum_snrs = sums/sum_errs
 
     #Define the velocity offsets of the satellite lines
@@ -285,11 +286,10 @@ def mask_ammonia_main_line(spec,h,window_width=5,snr=3,nlines=5,trans='11'):
         """
         crit_inner = np.logical_and(sum_ri>snr,sum_li>snr)
         crit_outer = np.logical_and(sum_ro>snr,sum_lo>snr)
-        #The main line must be inner and outer satellite lines must be greater than snr
         """
-        The main line emission should be brighter than the
-        satellite line emission, so the main line sum_snr must 
-        be greater than the inner and outer satellite line sum_snrs
+        The main line emission should be brighter than the satellite 
+        line emission, so I require the main line sum_snr to be
+        greater than the inner and outer satellite line sum_snrs
         """
         crit_main = np.logical_and(np.logical_and(sum_snrs>sum_li,
                                                   sum_snrs>sum_ri),
@@ -332,7 +332,7 @@ def mask_ammonia_main_line(spec,h,window_width=5,snr=3,nlines=5,trans='11'):
     correspond to the spectral channels
     """
     final_mask = np.zeros_like(spec)
-    final_mask[clump_chans[0]+int(ceil((window_width-1)/2))] = 1
+    final_mask[clump_chans[0]+int(np.ceil((window_width-1)/2))] = 1
     return(final_mask)
 
 def label_clumps(clump_mask):
@@ -439,7 +439,7 @@ def order_by_l(clumps,ls,bs,labeltype):
             new_clumps[clump_voxs] = float(i+1)
     elif labeltype=='2D':
         for i,idx in enumerate(new_ls_idx):
-            clump_pixs = np.where(clumps[idx,:,:]==idx)
+            clump_pixs = np.where(clumps[idx-1,:,:]==idx)
             new_clumps[i,clump_pixs[0],clump_pixs[1]] = float(i+1)
     else:
         print("Must provide valid labeltype: 2D or 3D")
@@ -544,7 +544,7 @@ def chan_to_vel(channel,h):
 
 def get_vax(h):
     """
-    Return the data cube's velocity axis using the header information
+    Return the data cube's velocity axis using the header information.
     """
     vax = np.linspace(chan_to_vel(0,h),
                       chan_to_vel(h['NAXIS3']-1,h),
