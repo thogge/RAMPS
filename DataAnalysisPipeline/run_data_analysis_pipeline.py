@@ -30,8 +30,8 @@ def main():
     overwrite = False
     try:
         opts,args = getopt.getopt(sys.argv[1:],"n:oh")
-    except getopt.GetoptError:
-        print("Invalid arguments")
+    except getopt.GetoptError as err:
+        print(err.msg)
         print(__doc__)
         sys.exit(2)
     for o,a in opts:
