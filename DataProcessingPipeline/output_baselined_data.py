@@ -292,10 +292,6 @@ def do_chunk_mom0(num,data,header):
             if np.isfinite(data[int(hw),i,j]):
                 ya[i,j] = sum_over_signal(data[:,i,j])
     #Convert to K km/s. Assumes CTYPE3 is LSR Velocity
-    #loc = np.where(ya>0.)
-    #print np.nansum(ya[loc])
-    #good_data_locations = np.where(ya > 0.)
-    #ya[good_data_locations] *= 0.001*abs(header['CDELT3'])
     ya = ya*0.001*abs(header['CDELT3'])
     fits.writeto("mom0_temp"+str(num)+".fits",ya,overwrite=True)
       
