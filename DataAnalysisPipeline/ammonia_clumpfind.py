@@ -151,14 +151,17 @@ def main():
                                       cube,hcube)
         clump_labels_3D = order_by_l(clump_labels_3D,lcs,bcs,'3D')
         clump_labels_2D = order_by_l(clump_labels_2D,lcs,bcs,'2D')
+    #Change the data type of the label arrays
+    clump_labels_3D = clump_labels_3D.astype(np.int16)
+    clump_labels_2D = clump_labels_2D.astype(np.int16)
     #Write the label cubes
     fits.writeto(output_filebase+'_clump_labels_3D.fits',
-                 clump_labels_3D.astype(float),
-                 edit_header(hcube,clump_labels_3D.astype(float)),
+                 clump_labels_3D,
+                 edit_header(hcube,clump_labels_3D),
                  overwrite=True)
     fits.writeto(output_filebase+'_clump_labels_2D.fits',
-                 clump_labels_2D.astype(float),
-                 edit_header(hcube,clump_labels_2D.astype(float)),
+                 clump_labels_2D,
+                 edit_header(hcube,clump_labels_2D),
                  overwrite=True)
 
 def do_chunk(num,data,h,output_filebase,trans):
@@ -502,6 +505,8 @@ def edit_header(h,d):
         hout['CDELT3'] = 1.
     hout['DATAMAX'] = d.max()
     hout['DATAMIN'] = 0.
+    #Change the header array type to int16
+    hout['BITPIX'] = 16
     return(hout)
 
 def get_coord_grids(h):
