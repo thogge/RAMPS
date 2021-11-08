@@ -561,6 +561,7 @@ def downsample_header(h,filter_width=1):
     """
     h['CDELT3'] = h['CDELT3']*float(filter_width)
     h['CRPIX3'] = h['CRPIX3']/float(filter_width)
+    h['NAXIS3'] = int(np.ceil(h['NAXIS3']/float(filter_width)))
     return(h)
 
 def strip_header(h,n):
