@@ -255,7 +255,6 @@ def mask_ammonia_main_line(spec,h,window_width=5,snr=3,nlines=5,trans='11'):
     #Create rolling sum and calculate the SNR of the summed channels
     roll_arr = rolling_window(spec,window_width)
     roll_arr_masked = mask_snr_spec(roll_arr,snr=1)
-    va = rolling_window(vax,window_width)
     sums = ma.sum(roll_arr_masked,-1)
     sum_errs = np.sqrt(ma.count(roll_arr_masked,-1))
     sum_snrs = sums/sum_errs
