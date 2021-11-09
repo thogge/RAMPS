@@ -655,27 +655,20 @@ def first_moment(spec,h,nsig=5.):
         mom1 = (masked*vax).sum()/masked.sum()
     return(mom1)
 
-def c2v(c,h):
+def chan_to_vel(chan,h):
     """
     Use the header information to translate from channels to velocity.
     """
-    v = ((c - (h['CRPIX3']-1))*h['CDELT3'] + h['CRVAL3'])*0.001
-    return(v)
-
-def v2c(v,h):
-    """
-    Use the header information to translate from velocity to channels.
-    """
-    c = ((v*1000. - h['CRVAL3'])/h['CDELT3'] + h['CRPIX3']-1)
-    return(int(round(c)))
+    vel = ((chan - (h['CRPIX3']-1))*h['CDELT3'] + h['CRVAL3'])*0.001
+    return(vel)
 
 def get_vax(h):
     """
     Use the header information to calculate the velocity axis of a spectrum.
     """
-    vmin = c2v(0,h)
-    vmax = c2v(h['NAXIS3']-1,h)
-    vax = np.linspace(vmin,vmax,h['NAXIS3'])
+    vel_min = chan_to_vel(0,h)
+    vel_max = chan_to_vel(h['NAXIS3']-1,h)
+    vax = np.linspace(vel_min,vel_max,h['NAXIS3'])
     return(vax)
 
 if __name__ == '__main__':
