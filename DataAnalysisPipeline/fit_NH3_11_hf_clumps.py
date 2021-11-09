@@ -42,20 +42,32 @@ import math
 import scipy.signal as si
 import matplotlib.pyplot as plt
 import multiprocessing as mp
-import my_pad
 import uncertainties as uu
 from uncertainties import unumpy as unp
 from uncertainties.umath import *
 from scipy.optimize import curve_fit
 from scipy import stats
-from pyspeckit.spectrum.models.ammonia_constants import (line_names, freq_dict, aval_dict, ortho_dict, voff_lines_dict, tau_wts_dict, ckms, ccms, h, kb, Jortho, Jpara, Brot, Crot)
+from pyspeckit.spectrum.models.ammonia_constants import (line_names, 
+                                                         freq_dict, 
+                                                         aval_dict, 
+                                                         ortho_dict, 
+                                                         voff_lines_dict, 
+                                                         tau_wts_dict, 
+                                                         ckms, ccms, 
+                                                         h, kb, 
+                                                         Jortho, 
+                                                         Jpara, Brot, 
+                                                         Crot)
 from pyspeckit.spectrum.units import SpectroscopicAxis, SpectroscopicAxes
 from astropy import units as u
 import pdb
 
+#Constants
+T_CMB = 2.7315 #K, Temperature of the Cosmic Microwave Background
+fwhm_to_sigma = (2*(2*np.log(2)))**(-0.5)
+
 def main():
     #Defaults
-    output_file = "default.fits"
     numcores = 1
     try:
         opts,args = getopt.getopt(sys.argv[1:],"i:l:r:n:o:h")
@@ -83,68 +95,128 @@ def main():
             sys.exit(2)
         
 
-    #Read in data into arrays[\]
+    #Read in data into arrays
     d,h = pyfits.getdata(input_file,header=True)
-    nans = np.where(np.isnan(d))
-    d[nans] = 0.
     labels_3D = pyfits.getdata(label_file)
     rms_map = pyfits.getdata(rms_file)
+    #Mask nonlabeled channels that are not associated with a clump
     mask_3D = np.zeros(labels_3D.shape)
     unmasked_voxs = np.where(labels_3D>0)
     mask_3D[unmasked_voxs] = 1.
+    #Get the pixel values of spectra that have clump emission
     main_peak = np.max(d*mask_3D,axis=0)
     clump_pxs = np.where(main_peak>0)
-    XG,YG = np.meshgrid(np.arange(rms_map.shape[1]),np.arange(rms_map.shape[0]))
-    xs,ys = XG[clump_pxs],YG[clump_pxs]
-    #pdb.set_trace()
-    vrs = get_mask_vranges(labels_3D,h)
+    xgrid,ygrid = np.meshgrid(np.arange(rms_map.shape[1]),np.arange(rms_map.shape[0]))
+    xpixs,ypixs = xgrid[clump_pxs],ygrid[clump_pxs]
+    #Get the velocity ranges for each labeled clump
+    vranges = get_vranges_from_labels(labels_3D,h)
     if numcores > 1:
-        #Split the data
-        xx = np.array_split(xs, numcores, 0)
-        yy = np.array_split(ys, numcores, 0)
-        ps = []
-        #Fit baselines and write to temporary files
-        for num in range(len(xx)):
-            ps.append(mp.Process(target=do_chunk_fit,
-                                              args=(num,d[:,yy[num],xx[num]],
-                                                    labels_3D[:,yy[num],xx[num]],
-                                                    rms_map[yy[num],xx[num]],
-                                                    vrs,h,output_filebase)))
-        for p in ps:
-            p.start()
-        for p in ps:
-            p.join()
+        #Split the arrays of pixel values
+        xsplit = np.array_split(xpixs, numcores, 0)
+        ysplit = np.array_split(ypixs, numcores, 0)
+        procs = []
+        """
+        Fit the NH3(1,1) spectra and write best-fit 
+        parameters and errors to temporary files
+        """
+        for num in range(len(xsplit)):
+            procs.append(mp.Process(target=do_chunk_fit,
+                                    args=(num,d[:,ysplit[num],xsplit[num]],
+                                          labels_3D[:,ysplit[num],xsplit[num]],
+                                          rms_map[ysplit[num],xsplit[num]],
+                                          vranges,h,output_filebase)))
+        for proc in procs:
+            proc.start()
+        for proc in procs:
+            proc.join()
 
-        fitcube = recombine_txt(numcores,xx,yy,output_filebase+"_temp_fit",d.shape)
-        fit_reg = recombine_txt(numcores,xx,yy,output_filebase+"_temp_fit_reg",d[:2,:,:].shape)
-        vel = recombine_txt(numcores,xx,yy,output_filebase+"_temp_vel",d[:2,:,:].shape)
-        vel_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_vel_err",d[:2,:,:].shape)
-        sigma = recombine_txt(numcores,xx,yy,output_filebase+"_temp_sigma",d[:2,:,:].shape)
-        sigma_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_sigma_err",d[:2,:,:].shape)
-        tex = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tex",d[:2,:,:].shape)
-        tex_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tex_err",d[:2,:,:].shape)
-        tau11_tot = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11_tot",d[:2,:,:].shape)
-        tau11_tot_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11_tot_err",d[:2,:,:].shape)
-        tau11_0 = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11_0",d[:2,:,:].shape)
-        tau11_0_err = recombine_txt(numcores,xx,yy,output_filebase+"_temp_tau11_0_err",d[:2,:,:].shape)
+        #Recombine temporary files into parameter maps
+        modelcube = recombine_txt(numcores,xsplit,ysplit,
+                                  output_filebase+"_fit",
+                                  d.shape)
+        fit_labels = recombine_txt(numcores,xsplit,ysplit,
+                                   output_filebase+"_fit_labels",
+                                   d[:2,:,:].shape)
+        vel = recombine_txt(numcores,xsplit,ysplit,
+                            output_filebase+"_vel",
+                            d[:2,:,:].shape)
+        vel_err = recombine_txt(numcores,xsplit,ysplit,
+                                output_filebase+"_vel_err",
+                                d[:2,:,:].shape)
+        sigma = recombine_txt(numcores,xsplit,ysplit,
+                              output_filebase+"_sigma",
+                              d[:2,:,:].shape)
+        sigma_err = recombine_txt(numcores,xsplit,ysplit,
+                                  output_filebase+"_sigma_err",
+                                  d[:2,:,:].shape)
+        tex = recombine_txt(numcores,xsplit,ysplit,
+                            output_filebase+"_tex",
+                            d[:2,:,:].shape)
+        tex_err = recombine_txt(numcores,xsplit,ysplit,
+                                output_filebase+"_tex_err",
+                                d[:2,:,:].shape)
+        tau11_tot = recombine_txt(numcores,xsplit,ysplit,
+                                  output_filebase+"_tau11_tot",
+                                  d[:2,:,:].shape)
+        tau11_tot_err = recombine_txt(numcores,xsplit,ysplit,
+                                      output_filebase+"_tau11_tot_err",
+                                      d[:2,:,:].shape)
+        tau11_0 = recombine_txt(numcores,xsplit,ysplit,
+                                output_filebase+"_tau11_0",
+                                d[:2,:,:].shape)
+        tau11_0_err = recombine_txt(numcores,xsplit,ysplit,
+                                    output_filebase+"_tau11_0_err",
+                                    d[:2,:,:].shape)
     else:
-        do_chunk_fit(0,d[:,ys,xs],labels_3D[:,ys,xs],rms_map[ys,xs],vrs,h,output_filebase)
-        fitcube = recombine_txt(numcores,xs,ys,output_filebase+"_temp_fit",d.shape)
-        fit_reg = recombine_txt(numcores,xs,ys,output_filebase+"_temp_fit_reg",d[:2,:,:].shape)
-        vel = recombine_txt(numcores,xs,ys,output_filebase+"_temp_vel",d[:2,:,:].shape)
-        vel_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_vel_err",d[:2,:,:].shape)
-        sigma = recombine_txt(numcores,xs,ys,output_filebase+"_temp_sigma",d[:2,:,:].shape)
-        sigma_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_sigma_err",d[:2,:,:].shape)
-        tex = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tex",d[:2,:,:].shape)
-        tex_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tex_err",d[:2,:,:].shape)
-        tau11_tot = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11_tot",d[:2,:,:].shape)
-        tau11_tot_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11_tot_err",d[:2,:,:].shape)
-        tau11_0 = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11_0",d[:2,:,:].shape)
-        tau11_0_err = recombine_txt(numcores,xs,ys,output_filebase+"_temp_tau11_0_err",d[:2,:,:].shape)
+        """
+        Fit the NH3(1,1) spectra and write best-fit 
+        parameters and errors to temporary files
+        """
+        do_chunk_fit(0,d[:,ypixs,xpixs],
+                     labels_3D[:,ypixs,xpixs],
+                     rms_map[ypixs,xpixs],
+                     vranges,h,output_filebase)
+        #Recombine temporary files into parameter maps
+        modelcube = recombine_txt(numcores,xpixs,ypixs,
+                                  output_filebase+"_fit",
+                                  d.shape)
+        fit_labels = recombine_txt(numcores,xpixs,ypixs,
+                                output_filebase+"_fit_labels",
+                                d[:2,:,:].shape)
+        vel = recombine_txt(numcores,xpixs,ypixs,
+                            output_filebase+"_vel",
+                            d[:2,:,:].shape)
+        vel_err = recombine_txt(numcores,xpixs,ypixs,
+                                output_filebase+"_vel_err",
+                                d[:2,:,:].shape)
+        sigma = recombine_txt(numcores,xpixs,ypixs,
+                              output_filebase+"_sigma",
+                              d[:2,:,:].shape)
+        sigma_err = recombine_txt(numcores,xpixs,ypixs,
+                                  output_filebase+"_sigma_err",
+                                  d[:2,:,:].shape)
+        tex = recombine_txt(numcores,xpixs,ypixs,
+                            output_filebase+"_tex",
+                            d[:2,:,:].shape)
+        tex_err = recombine_txt(numcores,xpixs,ypixs,
+                                output_filebase+"_tex_err",
+                                d[:2,:,:].shape)
+        tau11_tot = recombine_txt(numcores,xpixs,ypixs,
+                                  output_filebase+"_tau11_tot",
+                                  d[:2,:,:].shape)
+        tau11_tot_err = recombine_txt(numcores,xpixs,ypixs,
+                                      output_filebase+"_tau11_tot_err",
+                                      d[:2,:,:].shape)
+        tau11_0 = recombine_txt(numcores,xpixs,ypixs,
+                                output_filebase+"_tau11_0",
+                                d[:2,:,:].shape)
+        tau11_0_err = recombine_txt(numcores,xpixs,ypixs,
+                                    output_filebase+"_tau11_0_err",
+                                    d[:2,:,:].shape)
 
-    os.system("rm "+output_filebase+"_temp*.txt")
+    os.system("rm "+output_filebase+"*_temp*.txt")
     
-    fit_reg_file = output_filebase+"_hf_fit_reg.fits"
+    fit_labels_file = output_filebase+"_hf_fit_labels.fits"
     fit_file = output_filebase+"_hf_fit.fits"
     vel_file = output_filebase+"_hf_vel.fits"
     vel_err_file = output_filebase+"_hf_vel_err.fits"
@@ -157,16 +229,17 @@ def main():
     tau11_0_file = output_filebase+"_hf_tau0.fits"
     tau11_0_err_file = output_filebase+"_hf_tau0_err.fits"
 
+    """
+    Edit headers and write parameter files
+    """
     hfit = h[:]
     hfit['DATAMIN'] = -3.
     hfit['DATAMAX'] = 3.
-    pyfits.writeto(fit_file,fitcube,hfit,overwrite=True)
-    hfit_reg = edit_header(h[:])
-    hfit_reg['DATAMIN'] = np.nanmin(fit_reg)
-    hfit_reg['DATAMAX'] = np.nanmax(fit_reg)
-    #pdb.set_trace()
-    pyfits.writeto(fit_reg_file,fit_reg,hfit_reg,overwrite=True)
-    #htex = strip_header(hfit[:],3)
+    pyfits.writeto(fit_file,modelcube,hfit,overwrite=True)
+    hfit_labels = edit_header(h[:])
+    hfit_labels['DATAMIN'] = np.nanmin(fit_labels)
+    hfit_labels['DATAMAX'] = np.nanmax(fit_labels)
+    pyfits.writeto(fit_labels_file,fit_labels,hfit_labels,overwrite=True)
     htex = edit_header(hfit[:])
     htex['DATAMIN'] = 0.
     htex['DATAMAX'] = np.nanmax(tex)
@@ -195,19 +268,7 @@ def main():
     pyfits.writeto(tau11_0_file,tau11_0,htau11_0,overwrite=True)
     pyfits.writeto(tau11_0_err_file,tau11_0_err,htau11_0,overwrite=True)
    
-def recombine_3D(numparts,filebase):
-    """
-    Recombine all the individual fits files into 
-    one final image
-    """
-    indata = []
-    for n in range(numparts):
-        d = pyfits.getdata(filebase+"_"+str(n)+".fits")
-        indata.append(d)
-    final = np.dstack(indata)
-    return(final)
-    
-def recombine_txt(numparts,xx,yy,filebase,final_shape):
+def recombine_txt(numparts,xsplit,ysplit,filebase,final_shape):
     """
     Recombine all the individual fits files into 
     one final image
@@ -215,250 +276,231 @@ def recombine_txt(numparts,xx,yy,filebase,final_shape):
     indata = []
     final = np.full(final_shape,np.nan)
     for n in range(numparts):
-        d = np.loadtxt(filebase+"_"+str(n)+".txt")
-        for i in np.arange(len(xx[n])):
-            final[:,yy[n][i],xx[n][i]] = d[:,i]
+        d = np.loadtxt(filebase+"_temp"+str(n)+".txt")
+        for i in np.arange(len(xsplit[n])):
+            final[:,ysplit[n][i],xsplit[n][i]] = d[:,i]
     return(final)
     
 
-def do_chunk_fit(num,data,label,rms,vranges,header,output_filebase):
+def do_chunk_fit(num,spec_arr,label_arr,rms_arr,vranges,header,output_filebase):
     print(num)
     vax = get_vax(header)
-    xarr11 = SpectroscopicAxis(vax*u.km/u.s,
-                               velocity_convention='radio',
-                               refX=freq_dict['oneone']).as_unit(u.GHz)
+    freq11ax = vax_to_freq11ax(vax)
 
-    fitcube = np.zeros_like(data)
-    fit_reg=np.zeros(data[:2,:].shape)
-    vel=np.full(data[:2,:].shape,np.nan)
-    sigma=np.full(data[:2,:].shape,np.nan)
-    tex=np.full(data[:2,:].shape,np.nan)
-    tau11_tot=np.full(data[:2,:].shape,np.nan)
-    tau11_0=np.full(data[:2,:].shape,np.nan)
-    vel_err=np.full(data[:2,:].shape,np.nan)
-    sigma_err=np.full(data[:2,:].shape,np.nan)
-    tex_err=np.full(data[:2,:].shape,np.nan)
-    tau11_tot_err=np.full(data[:2,:].shape,np.nan)
-    tau11_0_err=np.full(data[:2,:].shape,np.nan)
+    model_arr = np.zeros_like(spec_arr)
+    fit_labels_arr = np.zeros(spec_arr[:2,:].shape)
+    vel_arr = np.full(spec_arr[:2,:].shape,np.nan)
+    sigma_arr = np.full(spec_arr[:2,:].shape,np.nan)
+    tex_arr = np.full(spec_arr[:2,:].shape,np.nan)
+    tau11_tot_arr = np.full(spec_arr[:2,:].shape,np.nan)
+    tau11_0_arr = np.full(spec_arr[:2,:].shape,np.nan)
+    vel_err_arr = np.full(spec_arr[:2,:].shape,np.nan)
+    sigma_err_arr = np.full(spec_arr[:2,:].shape,np.nan)
+    tex_err_arr = np.full(spec_arr[:2,:].shape,np.nan)
+    tau11_tot_err_arr = np.full(spec_arr[:2,:].shape,np.nan)
+    tau11_0_err_arr = np.full(spec_arr[:2,:].shape,np.nan)
 
     vmin = -10
-    vmax = 160
+    vmax = 140
     sigmin = 0.1
     sigmax = 5
-    texmin = 2.7315
+    texmin = T_CMB
     texmax = 50
     ttotmin = 0.01
     ttotmax = 50
-    par_bounds1 = [[vmin,sigmin,texmin,ttotmin],[vmax,sigmax,texmax,ttotmax]]
-    par_bounds2 = [[vmin,sigmin,texmin,ttotmin,vmin,sigmin,texmin,ttotmin],[vmax,sigmax,texmax,ttotmax,vmax,sigmax,texmax,ttotmax]]
-    for i in np.arange(data.shape[1]):
-        print(i,100*float(i)/data.shape[1])
-        s,l = [],[]
-        for c in np.unique(label[:,i])[1:]:
-            s.append(np.nansum(data[np.where(label[:,i]==c)[0],i]))
-            l.append(c)
-        cc = np.where(s==max(s))[0][0]
-        ll = l[cc]
-        clump_chans = np.where(label[:,i]==ll)[0]
-        vv = np.sum(vax[clump_chans]*data[clump_chans,i])/np.sum(data[clump_chans,i])
-        ww = max(len(clump_chans)*(header['CDELT3']/1e3)/(2*(2*np.log(2))**(0.5)),0.2)
-        init_pars1 = [vv,ww,5,5]
-        fit1,pars1,perrs1 = fit_NH3_11_hf(data[:,i],vax,rms[i],init_pars1,par_bounds1)
-        BIC_1 = get_BIC(data[:,i],fit1,rms[i],pars1)
-        #if np.nanmax((data[:,i]-fit1)/rms[i]) > 3:
-        try:
-            res_snr_sums = nh3_kernel_sum((data[:,i]-fit1)/rms[i],header)
-            v2 = vax[np.where(res_snr_sums==res_snr_sums.max())[0]]
-            init_pars2 = np.concatenate((pars1,np.array([v2,pars1[1],pars1[2],pars1[3]])))
-            fit2,pars2,perrs2 = fit_NH3_11_hf(data[:,i],vax,rms[i],init_pars2,par_bounds2)
-            BIC_2 = get_BIC(data[:,i],fit2,rms[i],pars2)
-        except:
-            fit2 = np.zeros_like(data[:,i])
-            pars2 = np.full((8,),np.nan)
-            perrs2 = np.full((8,),np.nan)
-            BIC_2 = np.nan
-        try:
-            tau11_0_1,tau11_0_err_1 = get_tau11_0_from_tau11_tot(xarr11.value,uu.ufloat(pars1[0],perrs1[0]),uu.ufloat(pars1[1],perrs1[1]),uu.ufloat(pars1[3],perrs1[3]))
-        except:
-            tau11_0_1 = 0.
-        try:
-            tau11_0_2_1,tau11_0_err_2_1 = get_tau11_0_from_tau11_tot(xarr11.value,uu.ufloat(pars2[0],perrs2[0]),uu.ufloat(pars2[1],perrs2[1]),uu.ufloat(pars2[3],perrs2[3]))
-        except:
-            tau11_0_2_1 = 0.
-        try:
-            tau11_0_2_2,tau11_0_err_2_2 = get_tau11_0_from_tau11_tot(xarr11.value,uu.ufloat(pars2[4],perrs2[4]),uu.ufloat(pars2[5],perrs2[5]),uu.ufloat(pars2[7],perrs2[7]))
-        except:
-            tau11_0_2_2 = 0.
-        
-        amp1 = (pars1[2]-texmin)*(1-math.exp(-tau11_0_1))
-        amp2_1 = (pars2[2]-texmin)*(1-math.exp(-tau11_0_2_1))
-        amp2_2 = (pars2[6]-texmin)*(1-math.exp(-tau11_0_2_2))
+    par_bounds = [[vmin,sigmin,texmin,ttotmin],[vmax,sigmax,texmax,ttotmax]]
+    for i in np.arange(spec_arr.shape[1]):
+        print(num,i,100*float(i)/spec_arr.shape[1])
 
-        #"""
-        lcomps = np.unique(label[:,i])[1:]
-        vfits = [pars1[0],pars2[0],pars2[4]]
-        crit = np.full((len(lcomps),len(vfits)),False)
-        for j,c in enumerate(lcomps):
-            for k,v in enumerate(vfits):
-                wvrs = np.where(vranges[:,0]==c)[0][0]
-                vrmin,vrmax = vranges[wvrs,1],vranges[wvrs,2]
-                #pdb.set_trace()
-                if v>=vrmin and v<=vrmax:
-                    crit[j,k] = True
-                else:
-                    crit[j,k] = False
-        
-        nsig = 2
-        if (amp2_1>nsig*rms[i] and amp2_2>nsig*rms[i]) and (BIC_2<(BIC_1-5) and crit[:,1].any() and crit[:,2].any()):
-            c1 = np.where(crit[:,1])[0]
-            if len(c1)>1:
-                vdiff = []
-                for cs in c1:
-                    wwcs = np.where(label[:,i]==lcomps[cs])[0]
-                    vvcs = np.sum(vax[wwcs]*data[wwcs,i])/np.sum(data[wwcs,i])
-                    vdiff.append(abs(vfits[1]-vvcs))
-                bc1 = np.where(vdiff == min(vdiff))
-                fit_reg[0,i] = lcomps[bc1]
-            else:
-                fit_reg[0,i] = lcomps[c1]
-            c2 = np.where(crit[:,2])[0]
-            if len(c2)>1:
-                vdiff = []
-                for cs in c2:
-                    wwcs = np.where(label[:,i]==lcomps[cs])[0]
-                    vvcs = np.sum(vax[wwcs]*data[wwcs,i])/np.sum(data[wwcs,i])
-                    vdiff.append(abs(vfits[2]-vvcs))
-                bc2 = np.where(vdiff == min(vdiff))
-                fit_reg[1,i] = lcomps[bc2]
-            else:
-                fit_reg[1,i] = lcomps[c2]
-            fit = fit2
-            pars = pars2
-            perrs = perrs2
-        elif amp1>nsig*rms[i] and crit[:,0].any():
-            c1 = np.where(crit[:,0])[0]
-            if len(c1)>1:
-                vdiff = []
-                for cs in c1:
-                    wwcs = np.where(label[:,i]==lcomps[cs])[0]
-                    vvcs = np.sum(vax[wwcs]*data[wwcs,i])/np.sum(data[wwcs,i])
-                    vdiff.append(abs(vfits[0]-vvcs))
-                bc1 = np.where(vdiff == min(vdiff))
-                fit_reg[0,i] = lcomps[bc1]
-            else:
-                fit_reg[0,i] = lcomps[c1]
-            fit = fit1
-            pars = pars1
-            perrs = perrs1
-        else:
-            fit = np.zeros_like(data[:,i])
-            pars = np.full((8,),np.nan)
-            perrs = np.full((8,),np.nan)
-        #pdb.set_trace()
-
-            
-        fitcube[:,i] = fit
-        for j in np.arange(len(pars)/4):
-            vel[j,i] = pars[4*j]
-            vel_err[j,i] = perrs[4*j]
-            sigma[j,i] = pars[4*j+1]
-            sigma_err[j,i] = perrs[4*j+1]
-            tex[j,i] = pars[4*j+2]
-            tex_err[j,i] = perrs[4*j+2]
-            tau11_tot[j,i] = pars[4*j+3]
-            tau11_tot_err[j,i] = perrs[4*j+3]
+        fit_labels,pars,perrs = fit_wrapper(spec_arr[:,i],vax,header,
+                                            label_arr[:,i],rms_arr[i],
+                                            par_bounds,vranges)
+        model = NH3_11_hf_func(freq11ax,*pars)
+        model_arr[:,i] = model
+        for j in np.arange(int(len(pars)/4)):
+            fit_labels_arr[j,i] = fit_labels[j]
+            vel_arr[j,i] = pars[4*j]
+            vel_err_arr[j,i] = perrs[4*j]
+            sigma_arr[j,i] = pars[4*j+1]
+            sigma_err_arr[j,i] = perrs[4*j+1]
+            tex_arr[j,i] = pars[4*j+2]
+            tex_err_arr[j,i] = perrs[4*j+2]
+            tau11_tot_arr[j,i] = pars[4*j+3]
+            tau11_tot_err_arr[j,i] = perrs[4*j+3]
             if np.isfinite(pars[4*j]):
-                tau11_0[j,i],tau11_0_err[j,i] = get_tau11_0_from_tau11_tot(xarr11.value,uu.ufloat(pars[4*j],perrs[4*j]),uu.ufloat(pars[4*j+1],perrs[4*j+1]),uu.ufloat(pars[4*j+3],perrs[4*j+3]))
-        #pdb.set_trace()
+                tau11_0_arr[j,i],\
+                tau11_0_err_arr[j,i] = get_tau11_0(freq11ax,
+                                                   pars[4*j:4*(j+1)],
+                                                   perrs[4*j:4*(j+1)])
+                                                           
 
-    np.savetxt(output_filebase+"_temp_fit_"+str(num)+".txt",fitcube)
-    np.savetxt(output_filebase+"_temp_fit_reg_"+str(num)+".txt",fit_reg)
-    np.savetxt(output_filebase+"_temp_vel_"+str(num)+".txt",vel)
-    np.savetxt(output_filebase+"_temp_vel_err_"+str(num)+".txt",vel_err)
-    np.savetxt(output_filebase+"_temp_sigma_"+str(num)+".txt",sigma)
-    np.savetxt(output_filebase+"_temp_sigma_err_"+str(num)+".txt",sigma_err)
-    np.savetxt(output_filebase+"_temp_tex_"+str(num)+".txt",tex)
-    np.savetxt(output_filebase+"_temp_tex_err_"+str(num)+".txt",tex_err)
-    np.savetxt(output_filebase+"_temp_tau11_tot_"+str(num)+".txt",tau11_tot)
-    np.savetxt(output_filebase+"_temp_tau11_tot_err_"+str(num)+".txt",tau11_tot_err)
-    np.savetxt(output_filebase+"_temp_tau11_0_"+str(num)+".txt",tau11_0)
-    np.savetxt(output_filebase+"_temp_tau11_0_err_"+str(num)+".txt",tau11_0_err)
+
+    np.savetxt(output_filebase+"_model_temp"+str(num)+".txt",model_arr)
+    np.savetxt(output_filebase+"_fit_labels_temp"+str(num)+".txt",fit_labels)
+    np.savetxt(output_filebase+"_vel_temp"+str(num)+".txt",vel)
+    np.savetxt(output_filebase+"_vel_err_temp"+str(num)+".txt",vel_err)
+    np.savetxt(output_filebase+"_sigma_temp"+str(num)+".txt",sigma)
+    np.savetxt(output_filebase+"_sigma_err_temp"+str(num)+".txt",sigma_err)
+    np.savetxt(output_filebase+"_tex_temp"+str(num)+".txt",tex)
+    np.savetxt(output_filebase+"_tex_err_temp"+str(num)+".txt",tex_err)
+    np.savetxt(output_filebase+"_tau11_tot_temp"+str(num)+".txt",tau11_tot)
+    np.savetxt(output_filebase+"_tau11_tot_err_temp"+str(num)+".txt",tau11_tot_err)
+    np.savetxt(output_filebase+"_tau11_0_temp"+str(num)+".txt",tau11_0)
+    np.savetxt(output_filebase+"_tau11_0_err_temp"+str(num)+".txt",tau11_0_err)
+
+
+def fit_wrapper(spec,vax,header,labeled_chans,rms,par_bounds,vranges):
+    finite_chans = np.where(np.isfinite(spec))
+    spec,vax,labeled_chans = spec[finite_chans],\
+                             vax[finite_chans],\
+                             labeled_chans[finite_chans]
+    channel_sums,labels = [],[]
+    for label in np.unique(labeled_chans)[1:]:
+        channel_sums.append(spec[np.where(labeled_chans==label)[0]].sum())
+        labels.append(label)
+    first_component_loc = np.argmax(channel_sums)
+    first_component_label = labels[first_component_loc]
+    fc_chans = np.where(labeled_chans==first_component_label)[0]
+    vel_init = (vax[fc_chans]*spec[fc_chans]).sum()/spec[fc_chans].sum()
+    sigma_init = max(len(fc_chans)*(header['CDELT3']/1e3)*fwhm_to_sigma,0.2)
+    init_pars1 = [vel_init,sigma_init,5,5]
+    pars1,perrs1 = fit_NH3_11_hf(spec,vax,rms,init_pars1,par_bounds)
+    freq11ax = vax_to_freq11ax(vax)
+    model1 = NH3_11_hf_func(freq11ax,*pars1)
+    BIC_1 = get_BIC(spec,model1,rms,pars1)
+        
+    try:
+        vel2 = get_peak_vel((spec-model1)/rms,vax,header)
+        init_pars2 = np.concatenate((pars1,
+                                     np.array([vel2,
+                                               pars1[1],
+                                               pars1[2],
+                                               pars1[3]])))
+        par_bounds[0] += par_bounds[0]
+        par_bounds[1] += par_bounds[1]
+        pars2,perrs2 = fit_NH3_11_hf(spec,vax,rms,init_pars2,par_bounds)
+        model2 = NH3_11_hf_func(freq11ax,*pars2)
+        BIC_2 = get_BIC(spec,model2,rms,pars2)
+    except:
+        model2 = np.zeros_like(spec)
+        pars2 = np.full((8,),np.nan)
+        perrs2 = np.full((8,),np.nan)
+        BIC_2 = np.nan
+        
+    BIC_0 = get_BIC(spec,np.zeros_like(spec),rms,[])
+    if BIC_0 < (BIC_1+5) and BIC_0 < (BIC_2+10):
+        pars = np.full((4,),np.nan)
+        perrs = np.full((4,),np.nan)
+        return([np.nan],pars,perrs)
+        
+    amp1 = get_model_amp(freq11ax,pars1,perrs1)
+    amp2_1 = get_model_amp(freq11ax,pars2[:4],perrs2[:4])
+    amp2_2 = get_model_amp(freq11ax,pars2[4:],perrs2[4:])
+    
+
+    component_labels = np.unique(labeled_chans)[1:]
+    vel_pars = [pars1[0],pars2[0],pars2[4]]
+    within_vrange = np.full((len(component_labels),len(vel_pars)),False)
+    for j,label in enumerate(component_labels):
+        for k,vel_par in enumerate(vel_pars):
+            label_loc = np.where(vranges[:,0]==label)[0][0]
+            vrange_min,vrange_max = vranges[label_loc,1],vranges[label_loc,2]
+            if vel_par>=vrange_min and vel_par<=vrange_max:
+                within_vrange[j,k] = True
+            else:
+                within_vrange[j,k] = False
+
+    nsig = 2
+    fit_labels = []
+    if ((amp2_1>nsig*rms and amp2_2>nsig*rms) and 
+        BIC_2<(BIC_1-5) and 
+        within_vrange[:,1].any() and within_vrange[:,2].any()):
+        two_comp_vel1_labels_idx = np.where(within_vrange[:,1])[0]
+        two_comp_vel1_labels = component_labels[two_comp_vel1_labels_idx]
+        if len(two_comp_vel1_labels)>1:
+            vel_diff = []
+            for label in two_comp_vel1_labels:
+                clump_chans = np.where(labeled_chans==label)[0]
+                int_weighted_vel = ((vax[clump_chans]*
+                                     spec[clump_chans]).sum()/
+                                    spec[clump_chans].sum())
+                vel_diff.append(abs(vel_pars[1]-int_weighted_vel))
+            two_comp_vel1_label_idx = np.argmin(vel_diff)
+            fit_labels.append(two_comp_vel1_labels[two_comp_vel1_label_idx])
+        else:
+            fit_labels.append(two_comp_vel1_labels[0])
+
+        two_comp_vel2_labels_idx = np.where(within_vrange[:,2])[0]
+        two_comp_vel2_labels = component_labels[two_comp_vel2_labels_idx]
+        if len(two_comp_vel2_labels)>1:
+            vel_diff = []
+            for label in two_comp_vel2_labels:
+                clump_chans = np.where(labeled_chans==label)[0]
+                int_weighted_vel = ((vax[clump_chans]*
+                                     spec[clump_chans]).sum()/
+                                    spec[clump_chans].sum())
+                vel_diff.append(abs(vel_pars[2]-int_weighted_vel))
+            two_comp_vel2_label_idx = np.argmin(vel_diff)
+            fit_labels.append(two_comp_vel2_labels[two_comp_vel2_label_idx])
+        else:
+            fit_labels.append(two_comp_vel2_labels[0])
+
+        pars = pars2
+        perrs = perrs2
+        
+    elif amp1>nsig*rms and within_vrange[:,0].any():
+        one_comp_vel1_labels_idx = np.where(within_vrange[:,0])[0]
+        one_comp_vel1_labels = component_labels[one_comp_vel1_labels_idx]
+        if len(one_comp_vel1_labels)>1:
+            vel_diff = []
+            for label in one_comp_vel1_labels:
+                clump_chans = np.where(labeled_chans==label)[0]
+                int_weighted_vel = ((vax[clump_chans]*
+                                     spec[clump_chans]).sum()/
+                                    spec[clump_chans].sum())
+                vel_diff.append(abs(vel_pars[0]-int_weighted_vel))
+            one_comp_vel1_label_idx = np.argmin(vel_diff)
+            fit_labels.append(one_comp_vel1_labels[one_comp_vel1_label_idx])
+        else:
+            fit_labels.append(one_comp_vel1_labels[0])
+
+        pars = pars1
+        perrs = perrs1
+    else:
+        fit_labels.append(np.nan)
+        pars = np.full((4,),np.nan)
+        perrs = np.full((4,),np.nan)
+    if len(fit_labels)==0: pdb.set_trace()
+    return(fit_labels,pars,perrs)
 
 
 def fit_NH3_11_hf(spec,vax,rms,init_pars,par_bounds):
     try:
-        xarr11 = SpectroscopicAxis(vax*u.km/u.s,
-                                   velocity_convention='radio',
-                                   refX=freq_dict['oneone']).as_unit(u.GHz)
+        freq11ax = vax_to_freq11ax(vax)
         noise = np.full(spec.shape,rms)
-        #pdb.set_trace()
-        popt, pcov = curve_fit(NH3_11_hf_func, xarr11.value, spec,
+
+        popt, pcov = curve_fit(NH3_11_hf_func, freq11ax, spec,
                                p0=init_pars,sigma=noise,
                                bounds=par_bounds)
-        fit = NH3_11_hf_func(xarr11.value,*popt)
         perr = np.sqrt(np.diag(pcov))
-        #pdb.set_trace()
-    #"""
     except:
-        #pdb.set_trace()
-        fit = np.zeros_like(spec)
         popt = np.full((len(init_pars),),np.nan)
         perr = np.full((len(init_pars),),np.nan)
-    #"""
-    return(fit,popt,perr)
-
-def mask_snr_spec(spec,snr=1):
-    masked = ma.masked_where(np.logical_or(spec<snr,np.isnan(spec)),spec)
-    return(masked)
-
-def rolling_window(a,window):
-    """
-    Magic code to quickly create a second dimension
-    with the elements in a rolling window. This
-    allows us to apply numpy operations over this
-    extra dimension MUCH faster than using the naive approach.
-    """
-    shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)    
-    strides = a.strides+(a.strides[-1],)
-    return np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides)
-
-def strip_header(h,n):
-    """
-    Remove the nth dimension from a FITS header
-    """
-    h['NAXIS'] = n-1
-    try:
-        del h['NAXIS'+str(n)]
-        del h['CTYPE'+str(n)]
-        del h['CRVAL'+str(n)]
-        del h['CDELT'+str(n)]
-        del h['CRPIX'+str(n)]
-    except:
-        pass
-    return(h)
-
-def edit_header(h,n=2):
-    h['NAXIS3'] = n
-    h['CRPIX3'] = 0.0
-    h['CDELT3'] = 1.0
-    h['CUNIT3'] = 'Components'
-    h['CRVAL3'] = 0.0
-    return(h)
-
+    return(popt,perr)
 
 def NH3_11_hf_func(x,*pars):
     model = np.zeros_like(x)
     linename = 'oneone'
     npars = 4
-    Tbkg = 2.7315
+    Tbkg = T_CMB
     voff_lines = np.array(voff_lines_dict[linename])
     tau_wts = np.array(tau_wts_dict[linename])
     lines = (1-voff_lines/ckms)*freq_dict[linename]/1e9
     tau_wts = tau_wts / (tau_wts).sum()
-    for i in range(len(pars)/npars):
+    for i in np.arange(len(pars)/npars).astype(int):
         nusigma = np.abs(pars[1+i*npars]/ckms*lines)
-        xoff_v = pars[0+i*npars]
-        nuoff = xoff_v/ckms*lines
+        vel_offset = pars[0+i*npars]
+        nuoff = vel_offset/ckms*lines
         # tau array
         tauprof = np.zeros_like(model)
         for kk,nuo in enumerate(nuoff):
@@ -466,116 +508,56 @@ def NH3_11_hf_func(x,*pars):
                         np.exp(-(x+nuo-lines[kk])**2 /
                                (2.0*nusigma[kk]**2)))
         model += (pars[2+i*npars]-Tbkg)*(1-np.exp(-1.*tauprof))
-    #pdb.set_trace()
-    return model
+    return(model)
 
-def lnlike_line(theta, x, y, yerr):
-    model = NH3_11_hf_func(x,*theta)
-    inv_sigma2 = 1.0/(yerr**2)
-    return -0.5*(np.sum((y-model)**2*inv_sigma2 - np.log(inv_sigma2)))
+def get_model_amp(freq11ax,pars,perrs):
+    tau11_0,tau11_0_err = get_tau11_0(freq11ax,pars,perrs)
+    amp = (pars[2]-T_CMB)*(1-math.exp(-tau11_0))
+    return(amp)
 
-def lnprior_line(theta,pbs):
-    ndim = len(theta)
-    npars = 4
-    ncomp = int(ndim/npars)
-    prs = []
-    for i in range(ncomp*npars):
-        prs.append([pbs[0][i],pbs[1][i]])
-    crits = []
-    for cc,rs in enumerate(prs):
-        if np.logical_and(theta[cc::ndim].min()>rs[0],
-                          theta[cc::ndim].max()<rs[1]):
-            crits.append(True)
-        else:
-            crits.append(False)
-    if False in crits:
-        return -np.inf
-    else:
-        lps = []
-        for i,p in enumerate(theta):
-            if i%npars != 0:
-                lps.append(p*np.log(prs[i%npars][1]/prs[i%npars][0]))
-            else:
-                lps.append(prs[i%npars][1]-prs[i%npars][0])
-        lp = -1.*np.log(np.prod(np.asarray(lps)))
-        return lp
+def get_tau11_0(freq11ax,pars,perrs):
+    vel = uu.ufloat(pars[0],perrs[0])
+    sigma = uu.ufloat(pars[1],perrs[1])
+    tau11_tot = uu.ufloat(pars[3],perrs[3])
 
-def lnprob_line(theta, x, y, yerr, pbs):
-    lp = lnprior_line(theta,pbs)
-    if not np.isfinite(lp):
-        return -np.inf
-    else:
-        return lp + lnlike_line(theta, x, y, yerr)
-
-def get_tau11_0_from_tau11_tot(xarr,vel,sigma,tau11_tot):
     linename = 'oneone'
-
-    #pdb.set_trace()
     voff_lines = np.array(voff_lines_dict[linename])
     tau_wts = np.array(tau_wts_dict[linename])
     lines = (1-voff_lines/ckms)*freq_dict[linename]/1e9
     tau_wts = tau_wts / (tau_wts).sum()
     nusigma = np.abs(sigma/ckms*lines)
-    xoff_v = vel
-    nuoff = xoff_v/ckms*lines
+    nuoff = vel/ckms*lines
     # tau array
-    tauprofn = np.zeros(len(xarr))
-    tauprofs = np.zeros(len(xarr))
+    tauprof = np.zeros(len(freq11ax))
     for kk,nuo in enumerate(nuoff):
-        tauprofn = tauprofn + (tau11_tot.nominal_value * tau_wts[kk] *
-                             unp.exp(-(xarr+nuo.nominal_value-lines[kk])**2/
-                                     (2.0*nusigma[kk].nominal_value**2)))
-        tauprofs = tauprofs + (tau11_tot * tau_wts[kk] *
-                             unp.exp(-(xarr+nuo-lines[kk])**2/
+        tauprof = tauprof + (tau11_tot * tau_wts[kk] *
+                             unp.exp(-(freq11ax+nuo-lines[kk])**2/
                                      (2.0*nusigma[kk]**2)))
 
          
-    freq = v2f_py(xoff_v,linename)/1e9
-    peak_loc = np.where(abs(freq-xarr) == abs(freq-xarr).min())
-    tau0 = tauprofn[peak_loc][0]
-    tau0_err = tauprofs[peak_loc][0].std_dev
-    #pdb.set_trace()
-    """
-    print tau0
-    plt.plot(tauprofn)
-    plt.show()
-    pdb.set_trace()
-    #"""
-    return tau0,tau0_err
+    freq = vel_to_freq(vel,linename)/1e9
+    line_center_chan = np.argmin(abs(freq-freq11ax))
+    tau0 = tauprof[line_center_chan].nominal_value
+    tau0_err = tauprof[line_center_chan].std_dev
+    return(tau0,tau0_err)
 
 def get_BIC(data,model,rms,pars):
-    loglike = -1.*(0.5*np.log(2*np.pi)+np.log(rms)+get_chi2(data,model,rms)/2)
+    loglike = -1.*(0.5*np.log(2*np.pi)+np.log(rms)+
+                   get_chi2(data,model,rms)/2)
     k = len(pars)
     N = len(data)
     BIC = np.log(N)*k-2*loglike
     return(BIC)
 
 def get_chi2(d,m,s):
-    return np.sum((d-m)**2/s**2)
+    return(np.sum((d-m)**2/s**2))
 
-def c2v(c,h):
-    v = ((c - (h['CRPIX3']-1))*h['CDELT3'] + h['CRVAL3'])*0.001
-    return v
-
-def v2c(v,h):
-    c = (v*1000. - h['CRVAL3'])/h['CDELT3'] + (h['CRPIX3']-1)
-    return int(round(c))
-
-def v2f_py(v,linename):
-    f0 = freq_dict[linename]
-    f = (f0)*(1-(v/ckms))
-    return f
-
-def f2v_py(f,linename):
-    f0 = freq_dict[linename]
-    v = ckms*(1-(f/f0))
-    return v
-
-def get_vax(h):
-    vmin = c2v(0,h)
-    vmax = c2v(h['NAXIS3']-1,h)
-    vax = np.linspace(vmin,vmax,h['NAXIS3'])
-    return vax
+def get_peak_vel(snr_spec,vax,header):
+    res_snr_sums = nh3_kernel_sum(snr_spec,header)
+    window_width = int(1e3/header['CDELT3'])
+    roll_offset = int(np.ceil((window_width-1)/2))
+    vel = vax[np.argmax(res_snr_sums)+roll_offset]
+    return(vel)
 
 def nh3_kernel_sum(spec,h):
     vsats = np.array([-19.421,-7.771,7.760,19.408])
@@ -591,15 +573,93 @@ def nh3_kernel_sum(spec,h):
     combined = sums+sum_lo+sum_li+sum_ri+sum_ro
     return(combined)
 
-def get_mask_vranges(label,h):
-    vrs = np.zeros((len(np.unique(label)[1:]),3))
-    for i,l in enumerate(np.unique(label)[1:]):
-        wcc = np.where(label==l)[0]
-        vmin = c2v(wcc.min(),h)
-        vmax = c2v(wcc.max(),h)
-        vrs[i,:] = np.array([l,vmin,vmax])
-    return(vrs)
+def mask_snr_spec(spec,snr=1):
+    masked = ma.masked_where(np.logical_or(spec<snr,np.isnan(spec)),spec)
+    return(masked)
 
+def rolling_window(a,window):
+    """
+    Magic code to quickly create a second dimension
+    with the elements in a rolling window. This
+    allows us to apply numpy operations over this
+    extra dimension MUCH faster than using the naive approach.
+    """
+    shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)    
+    strides = a.strides+(a.strides[-1],)
+    return(np.lib.stride_tricks.as_strided(a, shape=shape, strides=strides))
+
+def get_vranges_from_labels(labels,h):
+    vranges = np.zeros((len(np.unique(labels)[1:]),3))
+    for i,label in enumerate(np.unique(labels)[1:]):
+        label_chans = np.where(labels==label)[0]
+        vmin = chan_to_vel(label_chans.min(),h)
+        vmax = chan_to_vel(label_chans.max(),h)
+        vranges[i,:] = np.array([label,vmin,vmax])
+    return(vranges)
+
+def chan_to_vel(chan,h):
+    """
+    Use the header information to translate from channels to velocity.
+    """
+    vel = ((chan - (h['CRPIX3']-1))*h['CDELT3'] + h['CRVAL3'])*0.001
+    return(vel)
+
+def vel_to_freq(vel,linename):
+    """
+    Use the pyspeckit frequency dict to translate 
+    from channels to velocity.
+    """
+    freq0 = freq_dict[linename]
+    freq = (freq0)*(1-(vel/ckms))
+    return(freq)
+
+def get_vax(h):
+    """
+    Use the header information to calculate the velocity axis of a spectrum.
+    """
+    vel_min = chan_to_vel(0,h)
+    vel_max = chan_to_vel(h['NAXIS3']-1,h)
+    vax = np.linspace(vel_min,vel_max,h['NAXIS3'])
+    return(vax)
+
+def vax_to_freq11ax(vax):
+    """
+    Use pyspeckit SpectroscopicAxis object to get frequency axis
+    for the NH3(1,1) spectra
+    """
+    freq11ax = SpectroscopicAxis(vax*u.km/u.s,
+                                 velocity_convention='radio',
+                                 refX=freq_dict['oneone']).as_unit(u.GHz)
+    return(freq11ax.value)
+
+def strip_header(h,n):
+    """
+    Remove the nth dimension from a FITS header
+    """
+    try:
+        h['NAXIS'] = n-1
+        h['WCSAXES'] = n-1
+    except:
+        h['NAXIS'] = n-1
+
+    keys = ['NAXIS','CTYPE','CRVAL','CDELT','CRPIX','CUNIT']
+    for k in keys:
+        try:
+            del h[k+str(n)]
+        except:
+            pass
+    return(h)
+
+def edit_header(h,n=2):
+    """
+    Edit the FITS header for an n component parameter map
+    """
+    h['NAXIS3'] = n
+    h['CRPIX3'] = 0.0
+    h['CDELT3'] = 1.0
+    h['CUNIT3'] = 'Components'
+    h['CRVAL3'] = 0.0
+    return(h)
 
 if __name__ == '__main__':
     main()
